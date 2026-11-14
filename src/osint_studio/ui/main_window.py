@@ -1478,6 +1478,9 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, module_name: str, err: str) -> None:
         self.status_label.setText(f"Error in {module_name}: {err}")
+        self.btn_start.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.progress_bar.setFormat("Error occurred")
 
     def _on_finished(self, consolidated: Dict[str, Any]) -> None:
         self.latest_results = consolidated

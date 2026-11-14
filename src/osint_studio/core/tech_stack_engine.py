@@ -16,7 +16,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 import urllib.parse
 
+import certifi
 import httpx
+
+from osint_studio.core.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -117,11 +120,7 @@ class TechStackEngine:
         self.user_agent = user_agent
 
     def clean_domain(self, domain: str) -> str:
-        d = domain.strip().lower()
-        if "://" in d:
-            parsed = urllib.parse.urlparse(d)
-            d = parsed.netloc or parsed.path
-        return d.split("/")[0].split(":")[0].strip(".")
+        return normalize_domain(domain)
 
     def fingerprint_html_and_headers(
         self, html_body: str, headers: Dict[str, str]
@@ -181,7 +180,7 @@ class TechStackEngine:
         headers = {"User-Agent": self.user_agent}
 
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 for url in urls_to_try:
                     resp = client.get(url, headers=headers)
                     if resp.status_code == 200 and "contact:" in resp.text.lower():
@@ -220,7 +219,7 @@ class TechStackEngine:
         sitemaps: List[str] = []
 
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 resp = client.get(url, headers=headers)
                 if resp.status_code == 200 and "text" in resp.headers.get("content-type", ""):
                     for line in resp.text.splitlines():
@@ -246,7 +245,7 @@ class TechStackEngine:
         url = f"https://{domain}/.well-known/openid-configuration"
         headers = {"User-Agent": self.user_agent}
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 resp = client.get(url, headers=headers)
                 if resp.status_code == 200 and "issuer" in resp.text:
                     return True
@@ -265,7 +264,7 @@ class TechStackEngine:
         req_headers = {"User-Agent": self.user_agent, "Accept": "text/html,application/xhtml+xml"}
 
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 resp = client.get(f"https://{clean_d}", headers=req_headers)
                 if resp.status_code == 200:
                     html_body = resp.text[:500000]  # Read first 500KB

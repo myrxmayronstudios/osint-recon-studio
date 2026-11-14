@@ -118,7 +118,13 @@ class ReconWorker(QRunnable):
             if cached is not None:
                 self.signals.log.emit("INFO", f"⚡ [Cache Hit] Loaded {module_name} (<5ms)")
                 return cached
-        res = fetch_fn()
+        try:
+            res = fetch_fn()
+        except Exception as e:
+            logger.warning("Reconnaissance module [%s] encountered error: %s", module_name, e)
+            self.signals.log.emit("WARNING", f"Module [{module_name}] non-fatal warning: {str(e)}")
+            return {"error": str(e), "is_success": False}
+
         if res:
             try:
                 set_cached(cache_key, res, ttl_hours=ttl_hours)
@@ -629,13 +635,6 @@ class ReconWorker(QRunnable):
                 self.signals.log.emit(
                     "SUCCESS",
                     f"Brand Checker: {user_dict.get('claimed_count', 0)} claimed / {user_dict.get('available_count', 0)} available out of {user_dict.get('total_checked', 0)} platforms.",
-                )
-                consolidated["username"] = user_dict
-
-                self.signals.module_complete.emit("username", user_dict)
-                self.signals.log.emit(
-                    "SUCCESS",
-                    f"Brand Checker: {user_report.claimed_count} claimed / {user_report.available_count} available out of {user_report.total_checked} platforms.",
                 )
 
             # 14. Consolidated Scorecard

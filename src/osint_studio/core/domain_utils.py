@@ -27,31 +27,46 @@ TWO_LEVEL_TLDS = {
 def normalize_domain(domain_input: str) -> str:
     """Sanitizes user input, strips protocols/paths/ports, and applies IDN/Punycode encoding.
 
+    Robustly handles full URLs, basic authentication credentials, port numbers,
+    query parameters, email addresses, and internationalized domain names (IDNs).
+
     Examples:
-        'https://münchen.de/path' -> 'xn--mnchen-3ya.de'
+        'https://münchen.de/path?arg=1#frag' -> 'xn--mnchen-3ya.de'
         '  BLOG.Example.COM:8080/  ' -> 'blog.example.com'
+        'https://user:pass@example.com:8443/api/v1' -> 'example.com'
+        'contact@company.co.uk' -> 'company.co.uk'
     """
     if not domain_input:
         return ""
 
     d = domain_input.strip()
-    if "://" in d:
-        parsed = urllib.parse.urlparse(d)
-        d = parsed.netloc or parsed.path
 
-    # Strip paths, parameters, ports, and trailing periods
-    d = d.split("/")[0].split("?")[0].split("#")[0].split(":")[0].strip(". \t\r\n")
+    # Prepend scheme if missing so urllib.parse correctly extracts hostnames from paths and ports
+    test_url = d if "://" in d else f"https://{d}"
 
-    if not d:
+    try:
+        parsed = urllib.parse.urlparse(test_url)
+        host = parsed.hostname or parsed.netloc or d
+    except Exception:
+        host = d
+
+    # Strip residual paths, queries, fragments, ports, and whitespace
+    host = host.split("/")[0].split("?")[0].split("#")[0].split(":")[0].strip(". \t\r\n")
+
+    # If an email address was passed, extract domain part
+    if "@" in host:
+        host = host.split("@")[-1]
+
+    if not host:
         return ""
 
     # Convert Internationalized Domain Names (IDN) via Punycode
     try:
-        d = idna.encode(d.lower()).decode("ascii")
+        host = idna.encode(host.lower()).decode("ascii")
     except Exception:
-        d = d.lower()
+        host = host.lower()
 
-    return d
+    return host
 
 
 def extract_root_domain(domain: str) -> str:

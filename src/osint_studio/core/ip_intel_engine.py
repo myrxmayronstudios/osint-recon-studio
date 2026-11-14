@@ -12,6 +12,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
+import certifi
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ class IPIntelEngine:
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
 
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 resp = client.get(url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()

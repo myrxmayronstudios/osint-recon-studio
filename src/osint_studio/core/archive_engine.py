@@ -12,7 +12,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 import urllib.parse
 
+import certifi
 import httpx
+
+from osint_studio.core.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +77,7 @@ class ArchiveEngine:
         self.user_agent = user_agent
 
     def clean_domain(self, domain: str) -> str:
-        d = domain.strip().lower()
-        if "://" in d:
-            parsed = urllib.parse.urlparse(d)
-            d = parsed.netloc or parsed.path
-        return d.split("/")[0].split(":")[0].strip(".")
+        return normalize_domain(domain)
 
     def _format_timestamp(self, ts: str) -> str:
         """Converts YYYYMMDDHHMMSS to human-readable ISO string."""
@@ -102,7 +101,7 @@ class ArchiveEngine:
         params = {"url": clean_d}
 
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 resp = client.get(WAYBACK_AVAILABILITY_API, params=params, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -132,7 +131,7 @@ class ArchiveEngine:
         snapshots: List[ArchiveSnapshot] = []
 
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 resp = client.get(WAYBACK_CDX_API, params=params, headers=headers)
                 if resp.status_code == 200:
                     rows = resp.json()

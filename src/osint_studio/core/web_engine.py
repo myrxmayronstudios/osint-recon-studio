@@ -15,7 +15,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.parse
 
+import certifi
 import httpx
+
+from osint_studio.core.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -136,11 +139,7 @@ class WebEngine:
         self.user_agent = user_agent
 
     def clean_domain(self, domain: str) -> str:
-        d = domain.strip().lower()
-        if "://" in d:
-            parsed = urllib.parse.urlparse(d)
-            d = parsed.netloc or parsed.path
-        return d.split("/")[0].split(":")[0].strip(".")
+        return normalize_domain(domain)
 
     def inspect_tls_certificate(self, domain: str) -> TLSCertificateReport:
         """Passively inspects the server's public TLS certificate via SNI handshake."""
@@ -513,7 +512,7 @@ class WebEngine:
         headers = {"User-Agent": self.user_agent}
 
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
                 resp = client.get(url, headers=headers)
                 if resp.status_code == 200 and "text" in resp.headers.get("content-type", ""):
                     report.found = True
@@ -562,7 +561,7 @@ class WebEngine:
         resp: Optional[httpx.Response] = None
         redirect_chain: List[str] = []
 
-        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+        with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
             for url in urls_to_try:
                 try:
                     r = client.get(url, headers=headers)

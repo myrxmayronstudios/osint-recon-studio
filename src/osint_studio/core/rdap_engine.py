@@ -13,7 +13,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 import urllib.parse
 
+import certifi
 import httpx
+
+from osint_studio.core.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +117,7 @@ class RDAPEngine:
         self.user_agent = user_agent
 
     def clean_domain(self, domain: str) -> str:
-        d = domain.strip().lower()
-        if "://" in d:
-            parsed = urllib.parse.urlparse(d)
-            d = parsed.netloc or parsed.path
-        return d.split("/")[0].split(":")[0].strip(".")
+        return normalize_domain(domain)
 
     def _parse_vcard(self, vcard_array: List[Any]) -> Dict[str, str]:
         """Extracts fields from standard RDAP vcardArray (RFC 7095)."""
@@ -175,7 +174,7 @@ class RDAPEngine:
         raw_data: Optional[Dict[str, Any]] = None
         last_error = ""
 
-        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+        with httpx.Client(timeout=self.timeout, verify=certifi.where(), follow_redirects=True) as client:
             for url in urls_to_try:
                 try:
                     resp = client.get(url, headers=headers)

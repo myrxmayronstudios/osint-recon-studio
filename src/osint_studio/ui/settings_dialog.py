@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
@@ -31,6 +32,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rate_limit_rps": 2.0,
     "timeout_sec": 10,
     "user_agent": "OSINTReconStudio-PassiveAudit/1.0",
+    "theme": "mocha",
     "github_token": "",
     "virustotal_api_key": "",
     "urlscan_api_key": "",
@@ -102,6 +104,20 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(group_net)
 
+        # Appearance & GUI Theme Group
+        group_theme = QGroupBox("GUI Visual Theme")
+        form_theme = QFormLayout(group_theme)
+        self.combo_theme = QComboBox()
+        self.combo_theme.addItem("Catppuccin Mocha Dark (Default)", "mocha")
+        self.combo_theme.addItem("Tactical Monochrome (Pure Grayscale / OLED Black)", "monochrome")
+        current_theme = self.config.get("theme", "mocha").lower()
+        if current_theme in ("monochrome", "mono", "bw"):
+            self.combo_theme.setCurrentIndex(1)
+        else:
+            self.combo_theme.setCurrentIndex(0)
+        form_theme.addRow(QLabel("Interface Theme:"), self.combo_theme)
+        layout.addWidget(group_theme)
+
         # Optional Free-Tier API Keys Group
         group_keys = QGroupBox("Optional Free-Tier API Keys & Tokens (Passive Lookups)")
         form_keys = QFormLayout(group_keys)
@@ -163,6 +179,7 @@ class SettingsDialog(QDialog):
         self.config["rate_limit_rps"] = self.spin_rate.value()
         self.config["timeout_sec"] = self.spin_timeout.value()
         self.config["user_agent"] = self.input_ua.text().strip() or DEFAULT_CONFIG["user_agent"]
+        self.config["theme"] = self.combo_theme.currentData()
         self.config["github_token"] = self.input_github.text().strip()
         self.config["virustotal_api_key"] = self.input_vt.text().strip()
         self.config["urlscan_api_key"] = self.input_urlscan.text().strip()

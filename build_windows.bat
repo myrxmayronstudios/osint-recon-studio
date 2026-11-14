@@ -113,6 +113,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: 4b. Register package in editable mode so src/ is always in sys.path
+echo [*] Registering osint_studio in editable mode...
+".venv\Scripts\python.exe" -m pip install -e . --no-deps >nul 2>&1
+
 :: 5. Terminate any active instance and clean prior builds
 echo [*] Cleaning old build artifacts...
 taskkill /F /IM OSINTReconStudio.exe >nul 2>&1
@@ -156,9 +160,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Copy helper shortcut script to dist folder for easy user access
+:: Copy assets & helper shortcut script to dist folder for easy user access
+if exist "assets" (
+    xcopy /E /I /Y "assets" "dist\OSINTReconStudio\assets" >nul 2>&1
+)
 if exist "Create_Desktop_Shortcut.bat" (
     copy /y "Create_Desktop_Shortcut.bat" "dist\OSINTReconStudio\" >nul 2>&1
+)
+if exist "run_app.bat" (
+    copy /y "run_app.bat" "dist\OSINTReconStudio\" >nul 2>&1
 )
 
 :: 7. Automated Self-Test Verification

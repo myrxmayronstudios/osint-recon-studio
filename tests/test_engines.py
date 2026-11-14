@@ -71,6 +71,11 @@ from osint_studio.core.username_engine import (
 )
 from osint_studio.core.web_engine import WebEngine
 from osint_studio.ui.settings_dialog import DEFAULT_CONFIG, load_config, save_config
+from osint_studio.ui.styles import (
+    CATPPUCCIN_MOCHA_QSS,
+    MONOCHROME_QSS,
+    get_theme_stylesheet,
+)
 from osint_studio.ui.workers import ReconWorker
 
 
@@ -695,4 +700,22 @@ class TestSocialPrivacyEngine:
         assert report.public_profiles_found >= 2
         assert report.linkability_score > 0
         assert len(report.hardening_tips) > 0
+
+
+class TestThemeStyles:
+    """Tests for GUI visual styling and theme switching."""
+
+    def test_theme_stylesheet_resolution(self):
+        mocha_qss = get_theme_stylesheet("mocha")
+        assert "CATPPUCCIN" in mocha_qss or "#1e1e2e" in mocha_qss
+
+        mono_qss = get_theme_stylesheet("monochrome")
+        assert "Monochrome" in mono_qss or "#0b0b0b" in mono_qss
+
+        mono_fallback = get_theme_stylesheet("bw")
+        assert mono_fallback == mono_qss
+
+        default_fallback = get_theme_stylesheet("unknown_theme")
+        assert default_fallback == mocha_qss
+
 

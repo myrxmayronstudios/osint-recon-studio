@@ -77,8 +77,12 @@ from osint_studio.core.metadata_engine import MetadataEngine
 from osint_studio.core.phone_privacy_engine import PhonePrivacyEngine, PhonePrivacyReport
 from osint_studio.core.social_privacy_engine import SocialPrivacyEngine, SocialPrivacyReport
 from osint_studio.core.username_engine import check_brand_handles
-from osint_studio.ui.settings_dialog import SettingsDialog, load_config
-from osint_studio.ui.styles import CATPPUCCIN_MOCHA_QSS
+from osint_studio.ui.settings_dialog import SettingsDialog, load_config, save_config
+from osint_studio.ui.styles import (
+    CATPPUCCIN_MOCHA_QSS,
+    MONOCHROME_QSS,
+    get_theme_stylesheet,
+)
 from osint_studio.ui.workers import ReconWorker
 
 logger = logging.getLogger(__name__)
@@ -87,12 +91,16 @@ logger = logging.getLogger(__name__)
 def get_app_icon_path() -> Optional[str]:
     """Resolves path to app_icon.ico in both developer mode and PyInstaller frozen runtime."""
     candidates = []
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        candidates.append(Path(sys._MEIPASS) / "assets" / "app_icon.ico")
-        candidates.append(Path(sys.executable).parent / "assets" / "app_icon.ico")
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        candidates.append(exe_dir / "assets" / "app_icon.ico")
+        candidates.append(exe_dir / "_internal" / "assets" / "app_icon.ico")
+        if hasattr(sys, "_MEIPASS"):
+            candidates.append(Path(sys._MEIPASS) / "assets" / "app_icon.ico")
 
     proj_root = Path(__file__).resolve().parent.parent.parent
     candidates.append(proj_root / "assets" / "app_icon.ico")
+    candidates.append(Path.cwd() / "assets" / "app_icon.ico")
 
     for c in candidates:
         if c.exists():
@@ -118,9 +126,11 @@ class MainWindow(QMainWindow):
         self.current_worker: Optional[ReconWorker] = None
         self.current_report: Optional[Dict[str, Any]] = None
         self.metadata_engine = MetadataEngine()
+        self.config = load_config()
+        self.current_theme = self.config.get("theme", "mocha")
 
         self._init_ui()
-        self.setStyleSheet(CATPPUCCIN_MOCHA_QSS)
+        self.set_theme(self.current_theme, persist=False)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Gracefully halts active background workers when closing window to avoid thread destruction crashes."""
@@ -291,6 +301,13 @@ class MainWindow(QMainWindow):
         act_exit.triggered.connect(self.close)
         file_menu.addAction(act_exit)
 
+        # View Menu
+        view_menu = menubar.addMenu("&View")
+        act_toggle_theme = QAction("🌓 Toggle Monochrome / Mocha Theme", self)
+        act_toggle_theme.setShortcut("Ctrl+T")
+        act_toggle_theme.triggered.connect(self.toggle_theme)
+        view_menu.addAction(act_toggle_theme)
+
         # Help Menu
         help_menu = menubar.addMenu("&Help")
 
@@ -304,12 +321,14 @@ class MainWindow(QMainWindow):
 
     def _create_control_bar(self) -> QWidget:
         frame = QFrame()
+        self.control_frame = frame
         frame.setStyleSheet("background-color: #25273a; border-radius: 8px; padding: 4px;")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(10)
 
         lbl = QLabel("Target Domain:")
+        self.lbl_control_title = lbl
         lbl.setStyleSheet("font-weight: 700; color: #89b4fa; font-size: 14px;")
         layout.addWidget(lbl)
 
@@ -335,6 +354,11 @@ class MainWindow(QMainWindow):
         self.btn_clear = QPushButton("Clear")
         self.btn_clear.clicked.connect(self.clear_results)
         layout.addWidget(self.btn_clear)
+
+        self.btn_theme_toggle = QPushButton("🌓 Monochrome")
+        self.btn_theme_toggle.setToolTip("Switch between Catppuccin Mocha Dark and Tactical Monochrome UI (Ctrl+T)")
+        self.btn_theme_toggle.clicked.connect(self.toggle_theme)
+        layout.addWidget(self.btn_theme_toggle)
 
         self.btn_shortcut = QPushButton("📌 Pin to Desktop")
         self.btn_shortcut.setToolTip("Create a Windows Desktop shortcut pointing to this application")
@@ -410,8 +434,49 @@ class MainWindow(QMainWindow):
         return group
 
     # -------------------------------------------------------------------------
-    # Desktop Shortcut Creator
+    # Theme Management & Desktop Shortcut
     # -------------------------------------------------------------------------
+
+    def toggle_theme(self) -> None:
+        """Toggles between Catppuccin Mocha Dark and Tactical Monochrome UI."""
+        new_theme = "monochrome" if self.current_theme != "monochrome" else "mocha"
+        self.set_theme(new_theme, persist=True)
+
+    def set_theme(self, theme_name: str, persist: bool = True) -> None:
+        """Applies stylesheet and adjusts dynamic accents for Mocha or Monochrome themes."""
+        self.current_theme = (theme_name or "mocha").strip().lower()
+        qss = get_theme_stylesheet(self.current_theme)
+        self.setStyleSheet(qss)
+
+        is_mono = self.current_theme in ("monochrome", "mono", "bw")
+        if hasattr(self, "btn_theme_toggle"):
+            self.btn_theme_toggle.setText("🎨 Mocha Theme" if is_mono else "🌓 Monochrome")
+
+        if hasattr(self, "lbl_control_title"):
+            self.lbl_control_title.setStyleSheet(
+                "font-weight: 700; color: #ffffff; font-size: 14px;"
+                if is_mono else
+                "font-weight: 700; color: #89b4fa; font-size: 14px;"
+            )
+
+        if hasattr(self, "control_frame"):
+            self.control_frame.setStyleSheet(
+                "background-color: #141414; border: 1px solid #282828; border-radius: 8px; padding: 4px;"
+                if is_mono else
+                "background-color: #25273a; border-radius: 8px; padding: 4px;"
+            )
+
+        if hasattr(self, "status_label"):
+            self.status_label.setStyleSheet(
+                "color: #888888; font-weight: 500;"
+                if is_mono else
+                "color: #a6adc8; font-weight: 500;"
+            )
+
+        if persist:
+            cfg = load_config()
+            cfg["theme"] = self.current_theme
+            save_config(cfg)
 
     def _create_desktop_shortcut(self) -> None:
         """Creates an official desktop shortcut pointing to the compiled EXE or launcher."""
@@ -422,10 +487,15 @@ class MainWindow(QMainWindow):
 
             shortcut_path = desktop / "OSINT Recon Studio.lnk"
 
-            proj_root = Path(__file__).resolve().parent.parent.parent
-            exe_target = proj_root / "dist" / "OSINTReconStudio" / "OSINTReconStudio.exe"
-            if not exe_target.exists():
-                exe_target = proj_root / "run_app.bat"
+            if getattr(sys, "frozen", False):
+                exe_target = Path(sys.executable)
+                work_dir = exe_target.parent
+            else:
+                proj_root = Path(__file__).resolve().parent.parent.parent
+                exe_target = proj_root / "dist" / "OSINTReconStudio" / "OSINTReconStudio.exe"
+                if not exe_target.exists():
+                    exe_target = proj_root / "run_app.bat"
+                work_dir = exe_target.parent
 
             icon_target = get_app_icon_path() or ""
 
@@ -433,7 +503,7 @@ class MainWindow(QMainWindow):
             $ws = New-Object -ComObject WScript.Shell
             $s = $ws.CreateShortcut('{shortcut_path}')
             $s.TargetPath = '{exe_target}'
-            $s.WorkingDirectory = '{proj_root}'
+            $s.WorkingDirectory = '{work_dir}'
             $s.Description = 'OSINT Recon Studio - Native Windows Passive OSINT & Privacy Studio'
             if ('{icon_target}' -ne '' -and (Test-Path '{icon_target}')) {{
                 $s.IconLocation = '{icon_target},0'
@@ -2276,7 +2346,11 @@ class MainWindow(QMainWindow):
 
     def _open_settings_dialog(self) -> None:
         dlg = SettingsDialog(self)
-        dlg.exec()
+        if dlg.exec():
+            self.config = load_config()
+            new_theme = self.config.get("theme", "mocha")
+            if new_theme != self.current_theme:
+                self.set_theme(new_theme, persist=False)
 
     def _show_ethics_dialog(self) -> None:
         QMessageBox.information(

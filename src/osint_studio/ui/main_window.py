@@ -76,14 +76,14 @@ from osint_studio.core.github_osint_engine import audit_github_footprint
 from osint_studio.core.metadata_engine import MetadataEngine
 from osint_studio.core.phone_privacy_engine import PhonePrivacyEngine, PhonePrivacyReport
 from osint_studio.core.social_privacy_engine import SocialPrivacyEngine, SocialPrivacyReport
-from osint_studio.core.username_engine import check_brand_handles
+from osint_studio.core.username_engine import check_brand_handles, clean_brand_handle
 from osint_studio.ui.settings_dialog import SettingsDialog, load_config, save_config
 from osint_studio.ui.styles import (
     CATPPUCCIN_MOCHA_QSS,
     MONOCHROME_QSS,
     get_theme_stylesheet,
 )
-from osint_studio.ui.workers import ReconWorker
+from osint_studio.ui.workers import AsyncTaskWorker, ReconWorker
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,8 @@ class MainWindow(QMainWindow):
         """Gracefully halts active background workers when closing window to avoid thread destruction crashes."""
         if self.current_worker:
             self.current_worker.cancel()
-        self.thread_pool.waitForDone(1500)
+        self.thread_pool.clear()
+        self.thread_pool.waitForDone(1000)
         event.accept()
 
     # -------------------------------------------------------------------------
@@ -1129,9 +1130,9 @@ class MainWindow(QMainWindow):
         self.input_gh_handle.setPlaceholderText("e.g. github, google, or cloudflare")
         top_h.addWidget(self.input_gh_handle, 1)
 
-        btn_gh_query = QPushButton("Search GitHub Footprint")
-        btn_gh_query.clicked.connect(self._manual_github_lookup)
-        top_h.addWidget(btn_gh_query)
+        self.btn_gh_query = QPushButton("Search GitHub Footprint")
+        self.btn_gh_query.clicked.connect(self._manual_github_lookup)
+        top_h.addWidget(self.btn_gh_query)
         layout.addLayout(top_h)
 
         grp_profile = QGroupBox("GitHub Organization / User Profile")
@@ -1180,21 +1181,37 @@ class MainWindow(QMainWindow):
         return widget
 
     def _manual_github_lookup(self) -> None:
-        handle = self.input_gh_handle.text().strip() or extract_brand_handle(self.input_domain.text().strip())
+        raw = self.input_gh_handle.text().strip() or self.input_domain.text().strip()
+        handle = clean_brand_handle(raw)
         if not handle:
             QMessageBox.warning(self, "Invalid Handle", "Please enter a valid GitHub organization or username.")
             return
 
         cfg = load_config()
         token = cfg.get("github_token", "")
-        self.status_label.setText(f"Querying GitHub API for handle '{handle}'...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            gh_report = audit_github_footprint(handle, token=token)
+        self.btn_gh_query.setEnabled(False)
+        self.btn_gh_query.setText("Searching...")
+        self.status_label.setText(f"Querying GitHub API for handle '{handle}' in background...")
+        self.status_bar.showMessage(f"Querying GitHub API for '{handle}'...")
+
+        def on_finished(gh_report):
             self._populate_github_view(gh_report.to_dict())
-            self.status_label.setText("GitHub lookup complete.")
-        finally:
-            QApplication.restoreOverrideCursor()
+            self.status_label.setText(f"GitHub lookup for '{handle}' complete.")
+            self.status_bar.showMessage("GitHub lookup complete.", 5000)
+            self.btn_gh_query.setEnabled(True)
+            self.btn_gh_query.setText("Search GitHub Footprint")
+
+        def on_error(err_msg):
+            self.status_label.setText("GitHub lookup failed.")
+            self.status_bar.showMessage(f"Error: {err_msg}", 5000)
+            self.btn_gh_query.setEnabled(True)
+            self.btn_gh_query.setText("Search GitHub Footprint")
+            QMessageBox.warning(self, "Lookup Error", f"Failed to query GitHub:\n{err_msg}")
+
+        worker = AsyncTaskWorker(audit_github_footprint, handle, token=token)
+        worker.signals.finished.connect(on_finished)
+        worker.signals.error.connect(on_error)
+        self.thread_pool.start(worker)
 
     # -------------------------------------------------------------------------
     # View 11: Public PGP Keyserver Contacts
@@ -1245,9 +1262,9 @@ class MainWindow(QMainWindow):
         self.input_brand_handle.setPlaceholderText("e.g. brand handle to audit across 20 platforms")
         top_h.addWidget(self.input_brand_handle, 1)
 
-        btn_user_query = QPushButton("Check Brand Across 20 Platforms")
-        btn_user_query.clicked.connect(self._manual_username_check)
-        top_h.addWidget(btn_user_query)
+        self.btn_user_query = QPushButton("Check Brand Across 20 Platforms")
+        self.btn_user_query.clicked.connect(self._manual_username_check)
+        top_h.addWidget(self.btn_user_query)
         layout.addLayout(top_h)
 
         grp_tbl = QGroupBox("Multi-Platform Identity Footprint (20 Platforms)")
@@ -1274,19 +1291,35 @@ class MainWindow(QMainWindow):
         return widget
 
     def _manual_username_check(self) -> None:
-        handle = self.input_brand_handle.text().strip() or extract_brand_handle(self.input_domain.text().strip())
+        raw = self.input_brand_handle.text().strip() or self.input_domain.text().strip()
+        handle = clean_brand_handle(raw)
         if not handle:
-            QMessageBox.warning(self, "Invalid Handle", "Please enter a valid brand handle to check.")
+            QMessageBox.warning(self, "Invalid Handle", "Please enter a valid brand handle or username to check.")
             return
 
-        self.status_label.setText(f"Auditing brand '{handle}' across 20 platforms...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            report = check_brand_handles(handle)
+        self.btn_user_query.setEnabled(False)
+        self.btn_user_query.setText("Auditing 20 Platforms...")
+        self.status_label.setText(f"Auditing brand '{handle}' across 20 platforms in background...")
+        self.status_bar.showMessage(f"Auditing brand '{handle}' across 20 platforms...")
+
+        def on_finished(report):
             self._populate_username_view(report.to_dict())
-            self.status_label.setText("Brand audit complete.")
-        finally:
-            QApplication.restoreOverrideCursor()
+            self.status_label.setText(f"Brand audit for '{handle}' complete.")
+            self.status_bar.showMessage("Brand audit complete.", 5000)
+            self.btn_user_query.setEnabled(True)
+            self.btn_user_query.setText("Check Brand Across 20 Platforms")
+
+        def on_error(err_msg):
+            self.status_label.setText("Brand audit encountered an error.")
+            self.status_bar.showMessage(f"Error: {err_msg}", 5000)
+            self.btn_user_query.setEnabled(True)
+            self.btn_user_query.setText("Check Brand Across 20 Platforms")
+            QMessageBox.warning(self, "Audit Error", f"Failed to check brand handle:\n{err_msg}")
+
+        worker = AsyncTaskWorker(check_brand_handles, handle)
+        worker.signals.finished.connect(on_finished)
+        worker.signals.error.connect(on_error)
+        self.thread_pool.start(worker)
 
     # -------------------------------------------------------------------------
     # View 13: Document Metadata (Exif)
@@ -1306,11 +1339,11 @@ class MainWindow(QMainWindow):
         self.input_meta_file.setPlaceholderText("Select a local PDF or image file (PDF, JPEG, PNG, TIFF)...")
         btn_browse = QPushButton("Browse File...")
         btn_browse.clicked.connect(self._browse_metadata_file)
-        btn_scan_file = QPushButton("Inspect File Metadata")
-        btn_scan_file.clicked.connect(self._scan_local_metadata)
+        self.btn_scan_file = QPushButton("Inspect File Metadata")
+        self.btn_scan_file.clicked.connect(self._scan_local_metadata)
         h_local.addWidget(self.input_meta_file, 1)
         h_local.addWidget(btn_browse)
-        h_local.addWidget(btn_scan_file)
+        h_local.addWidget(self.btn_scan_file)
         v_in.addLayout(h_local)
 
         layout.addWidget(grp_input)
@@ -1341,24 +1374,41 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No File", "Please select a file to inspect.")
             return
 
-        report = self.metadata_engine.inspect_file(fp)
-        rows: List[List[Any]] = [
-            ["File Type", report.file_type],
-            ["File Size", f"{report.file_size_bytes:,} bytes"],
-            ["Author", report.author or "Not Disclosed"],
-            ["Creator / Tool", report.creator_tool or "Not Disclosed"],
-            ["Producer / Engine", report.producer or "Not Disclosed"],
-            ["Creation Date", report.creation_date or "Not Disclosed"],
-            ["Modification Date", report.modification_date or "Not Disclosed"],
-            ["Camera Model", report.camera_model or "Not Disclosed"],
-            ["Software", report.software_used or "Not Disclosed"],
-            ["GPS Coordinates", report.gps_coordinates or "None"],
-        ]
-        for k, v in report.all_metadata.items():
-            if k not in ["Author", "Creator", "Producer", "CreationDate", "ModDate"]:
-                rows.append([k, v])
+        self.btn_scan_file.setEnabled(False)
+        self.btn_scan_file.setText("Extracting Metadata...")
+        self.status_label.setText("Inspecting file metadata in background...")
 
-        self.populate_table_safely(self.table_metadata, rows)
+        def on_finished(report):
+            rows: List[List[Any]] = [
+                ["File Type", report.file_type],
+                ["File Size", f"{report.file_size_bytes:,} bytes"],
+                ["Author", report.author or "Not Disclosed"],
+                ["Creator / Tool", report.creator_tool or "Not Disclosed"],
+                ["Producer / Engine", report.producer or "Not Disclosed"],
+                ["Creation Date", report.creation_date or "Not Disclosed"],
+                ["Modification Date", report.modification_date or "Not Disclosed"],
+                ["Camera Model", report.camera_model or "Not Disclosed"],
+                ["Software", report.software_used or "Not Disclosed"],
+                ["GPS Coordinates", report.gps_coordinates or "None"],
+            ]
+            for k, v in report.all_metadata.items():
+                if k not in ["Author", "Creator", "Producer", "CreationDate", "ModDate"]:
+                    rows.append([k, v])
+            self.populate_table_safely(self.table_metadata, rows)
+            self.status_label.setText("File metadata inspection complete.")
+            self.btn_scan_file.setEnabled(True)
+            self.btn_scan_file.setText("Inspect File Metadata")
+
+        def on_error(err_msg):
+            self.status_label.setText("Metadata extraction failed.")
+            self.btn_scan_file.setEnabled(True)
+            self.btn_scan_file.setText("Inspect File Metadata")
+            QMessageBox.warning(self, "Inspection Error", f"Failed to extract metadata:\n{err_msg}")
+
+        worker = AsyncTaskWorker(self.metadata_engine.inspect_file, fp)
+        worker.signals.finished.connect(on_finished)
+        worker.signals.error.connect(on_error)
+        self.thread_pool.start(worker)
 
     # -------------------------------------------------------------------------
     # View 14: Wayback Machine History
@@ -1464,10 +1514,10 @@ class MainWindow(QMainWindow):
         self.combo_phone_region.addItems(["US", "GB", "DE", "FR", "CA", "AU", "IN", "JP", "BR", "MX", "CH", "NL"])
         top_h.addWidget(self.combo_phone_region)
 
-        btn_phone_audit = QPushButton("Audit Phone Privacy & Carrier")
-        btn_phone_audit.setObjectName("primaryButton")
-        btn_phone_audit.clicked.connect(self._run_phone_privacy_audit)
-        top_h.addWidget(btn_phone_audit)
+        self.btn_phone_audit = QPushButton("Audit Phone Privacy & Carrier")
+        self.btn_phone_audit.setObjectName("primaryButton")
+        self.btn_phone_audit.clicked.connect(self._run_phone_privacy_audit)
+        top_h.addWidget(self.btn_phone_audit)
         layout.addLayout(top_h)
 
         # Metric Banner
@@ -1541,14 +1591,27 @@ class MainWindow(QMainWindow):
             return
 
         region = self.combo_phone_region.currentText()
-        self.status_label.setText(f"Analyzing phone number '{raw}'...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            report = PhonePrivacyEngine.audit_phone(raw, default_region=region)
+        self.btn_phone_audit.setEnabled(False)
+        self.btn_phone_audit.setText("Analyzing...")
+        self.status_label.setText(f"Analyzing phone number '{raw}' in background...")
+
+        def on_finished(report):
             self._populate_phone_privacy_view(report)
             self.status_label.setText("Phone privacy audit complete.")
-        finally:
-            QApplication.restoreOverrideCursor()
+            self.status_bar.showMessage("Phone privacy audit complete.", 5000)
+            self.btn_phone_audit.setEnabled(True)
+            self.btn_phone_audit.setText("Audit Phone Privacy & Carrier")
+
+        def on_error(err_msg):
+            self.status_label.setText("Phone audit failed.")
+            self.btn_phone_audit.setEnabled(True)
+            self.btn_phone_audit.setText("Audit Phone Privacy & Carrier")
+            QMessageBox.warning(self, "Phone Audit Error", f"Failed to analyze phone number:\n{err_msg}")
+
+        worker = AsyncTaskWorker(PhonePrivacyEngine.audit_phone, raw, default_region=region)
+        worker.signals.finished.connect(on_finished)
+        worker.signals.error.connect(on_error)
+        self.thread_pool.start(worker)
 
     def _populate_phone_privacy_view(self, report: PhonePrivacyReport) -> None:
         self.lbl_phone_score.setText(f"Privacy Score: {report.privacy_score}/100")
@@ -1590,10 +1653,10 @@ class MainWindow(QMainWindow):
         self.input_privacy_email.setPlaceholderText("e.g. user@example.com")
         top_h.addWidget(self.input_privacy_email, 2)
 
-        btn_email_audit = QPushButton("Audit Email Exposure & Breaches")
-        btn_email_audit.setObjectName("primaryButton")
-        btn_email_audit.clicked.connect(self._run_email_privacy_audit)
-        top_h.addWidget(btn_email_audit)
+        self.btn_email_audit = QPushButton("Audit Email Exposure & Breaches")
+        self.btn_email_audit.setObjectName("primaryButton")
+        self.btn_email_audit.clicked.connect(self._run_email_privacy_audit)
+        top_h.addWidget(self.btn_email_audit)
         layout.addLayout(top_h)
 
         # Metric Banner
@@ -1665,14 +1728,27 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Email", "Please enter an email address to analyze.")
             return
 
-        self.status_label.setText(f"Auditing email exposure for '{raw}'...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            report = EmailPrivacyEngine.audit_email(raw)
+        self.btn_email_audit.setEnabled(False)
+        self.btn_email_audit.setText("Auditing Exposure...")
+        self.status_label.setText(f"Auditing email exposure for '{raw}' in background...")
+
+        def on_finished(report):
             self._populate_email_privacy_view(report)
             self.status_label.setText("Email privacy audit complete.")
-        finally:
-            QApplication.restoreOverrideCursor()
+            self.status_bar.showMessage("Email privacy audit complete.", 5000)
+            self.btn_email_audit.setEnabled(True)
+            self.btn_email_audit.setText("Audit Email Exposure & Breaches")
+
+        def on_error(err_msg):
+            self.status_label.setText("Email audit failed.")
+            self.btn_email_audit.setEnabled(True)
+            self.btn_email_audit.setText("Audit Email Exposure & Breaches")
+            QMessageBox.warning(self, "Email Audit Error", f"Failed to audit email:\n{err_msg}")
+
+        worker = AsyncTaskWorker(EmailPrivacyEngine.audit_email, raw)
+        worker.signals.finished.connect(on_finished)
+        worker.signals.error.connect(on_error)
+        self.thread_pool.start(worker)
 
     def _populate_email_privacy_view(self, report: EmailPrivacyReport) -> None:
         self.lbl_email_priv_score.setText(f"Privacy Score: {report.privacy_score}/100")
@@ -1716,10 +1792,10 @@ class MainWindow(QMainWindow):
         self.input_social_handle.setPlaceholderText("e.g. personal handle to audit across Instagram, Facebook, X, Reddit, etc.")
         top_h.addWidget(self.input_social_handle, 2)
 
-        btn_social_audit = QPushButton("Audit Social Exposure & Linkability")
-        btn_social_audit.setObjectName("primaryButton")
-        btn_social_audit.clicked.connect(self._run_social_privacy_audit)
-        top_h.addWidget(btn_social_audit)
+        self.btn_social_audit = QPushButton("Audit Social Exposure & Linkability")
+        self.btn_social_audit.setObjectName("primaryButton")
+        self.btn_social_audit.clicked.connect(self._run_social_privacy_audit)
+        top_h.addWidget(self.btn_social_audit)
         layout.addLayout(top_h)
 
         # Metric Banner
@@ -1773,18 +1849,32 @@ class MainWindow(QMainWindow):
 
     def _run_social_privacy_audit(self) -> None:
         raw = self.input_social_handle.text().strip()
-        if not raw:
-            QMessageBox.warning(self, "No Handle", "Please enter a username or handle to inspect.")
+        handle = clean_brand_handle(raw)
+        if not handle:
+            QMessageBox.warning(self, "No Handle", "Please enter a valid username or handle to inspect.")
             return
 
-        self.status_label.setText(f"Inspecting public social exposure for handle '{raw}'...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            report = SocialPrivacyEngine.audit_social_handle(raw)
+        self.btn_social_audit.setEnabled(False)
+        self.btn_social_audit.setText("Auditing 8 Networks...")
+        self.status_label.setText(f"Inspecting public social exposure for handle '{handle}' in background...")
+
+        def on_finished(report):
             self._populate_social_privacy_view(report)
             self.status_label.setText("Social exposure audit complete.")
-        finally:
-            QApplication.restoreOverrideCursor()
+            self.status_bar.showMessage("Social exposure audit complete.", 5000)
+            self.btn_social_audit.setEnabled(True)
+            self.btn_social_audit.setText("Audit Social Exposure & Linkability")
+
+        def on_error(err_msg):
+            self.status_label.setText("Social audit failed.")
+            self.btn_social_audit.setEnabled(True)
+            self.btn_social_audit.setText("Audit Social Exposure & Linkability")
+            QMessageBox.warning(self, "Social Audit Error", f"Failed to audit social handle:\n{err_msg}")
+
+        worker = AsyncTaskWorker(SocialPrivacyEngine.audit_social_handle, handle)
+        worker.signals.finished.connect(on_finished)
+        worker.signals.error.connect(on_error)
+        self.thread_pool.start(worker)
 
     def _populate_social_privacy_view(self, report: SocialPrivacyReport) -> None:
         self.lbl_social_link_score.setText(f"Linkability: {report.linkability_score}/100")

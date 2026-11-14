@@ -11,7 +11,7 @@ import datetime
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QObject, QRunnable, Signal
 
@@ -590,3 +590,35 @@ class ReconWorker(QRunnable):
             logger.exception("Unexpected error in ReconWorker")
             self.signals.error.emit("worker", f"Fatal reconnaissance pipeline error: {str(e)}")
             self.signals.log.emit("ERROR", f"Fatal error: {str(e)}")
+
+
+class TaskSignals(QObject):
+    """Signals for generic asynchronous task worker."""
+    started = Signal()
+    finished = Signal(object)
+    error = Signal(str)
+
+
+class AsyncTaskWorker(QRunnable):
+    """Executes an isolated audit task (username check, github lookup, privacy audit) in background.
+
+    Guarantees 100% responsive GUI by offloading blocking network calls and CPU tasks
+    away from the PySide6 main Qt thread.
+    """
+
+    def __init__(self, fn: Callable, *args: Any, **kwargs: Any) -> None:
+        super().__init__()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.signals = TaskSignals()
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            self.signals.started.emit()
+            res = self.fn(*self.args, **self.kwargs)
+            self.signals.finished.emit(res)
+        except Exception as exc:
+            logger.exception("Error executing async task worker")
+            self.signals.error.emit(str(exc))

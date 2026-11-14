@@ -68,6 +68,7 @@ from osint_studio.core.urlscan_engine import (
 from osint_studio.core.username_engine import (
     UsernameReport,
     check_brand_handles,
+    clean_brand_handle,
 )
 from osint_studio.core.web_engine import WebEngine
 from osint_studio.ui.settings_dialog import DEFAULT_CONFIG, load_config, save_config
@@ -95,6 +96,13 @@ class TestDomainUtils:
     def test_extract_brand_handle(self):
         assert extract_brand_handle("github.com") == "github"
         assert extract_brand_handle("blog.cloudflare.co.uk") == "cloudflare"
+
+    def test_clean_brand_handle(self):
+        assert clean_brand_handle("user@example.com") == "user"
+        assert clean_brand_handle("https://github.com/torvalds") == "torvalds"
+        assert clean_brand_handle("  @mybrand  ") == "mybrand"
+        assert clean_brand_handle("google.com") == "google"
+        assert clean_brand_handle("") == ""
 
     def test_sanitize_filename(self):
         assert sanitize_filename("example.com:80/test") == "example.com_80_test"

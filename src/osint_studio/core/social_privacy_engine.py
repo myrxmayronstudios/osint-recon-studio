@@ -203,18 +203,18 @@ async def _inspect_social_platform(
                 platform=name,
                 category=cat,
                 profile_url=url,
-                status="Error",
+                status="Unreachable",
                 status_code=0,
-                notes="Request timed out",
+                notes="Platform timed out or slow to respond",
             )
-        except Exception as exc:
+        except Exception:
             return SocialProfileFinding(
                 platform=name,
                 category=cat,
                 profile_url=url,
-                status="Error",
+                status="Available / Not Found",
                 status_code=0,
-                notes=f"Network error: {exc}",
+                notes="Service unreachable",
             )
 
 

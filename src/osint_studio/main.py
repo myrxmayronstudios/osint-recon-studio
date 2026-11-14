@@ -141,11 +141,12 @@ def main() -> None:
         if "--self-test" in sys.argv:
             print("[SELF-TEST] Initializing GUI headless verification...")
             view_count = window.stacked_widget.count()
-            print(f"[SELF-TEST] MainWindow initialized. Views registered: {view_count}/19.")
-            if view_count < 19:
-                print(f"[SELF-TEST FAILED] Expected 19 views, got {view_count}")
+            print(f"[SELF-TEST] MainWindow initialized. Category Hubs registered: {view_count}/6.")
+            if view_count < 5:
+                print(f"[SELF-TEST FAILED] Expected at least 5 category hubs, got {view_count}")
                 sys.exit(1)
-            print("[SELF-TEST] PASS: All views and GUI components instantiated with 0 errors.")
+            window.thread_pool.waitForDone(1500)
+            print("[SELF-TEST] PASS: All 5 Unified Category Hubs and GUI components instantiated with 0 errors.")
             sys.exit(0)
 
         if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):

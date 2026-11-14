@@ -140,11 +140,15 @@ echo [*] Compiling standalone Windows application via PyInstaller...
                                --collect-all "phonenumbers" ^
                                --collect-all "pypdf" ^
                                --collect-all "PIL" ^
+                               --collect-all "h2" ^
                                --collect-data "certifi" ^
                                --collect-submodules "dnspython" ^
                                --collect-submodules "idna" ^
                                --hidden-import "certifi" ^
                                --hidden-import "idna" ^
+                               --hidden-import "h2" ^
+                               --hidden-import "hpack" ^
+                               --hidden-import "hyperframe" ^
                                --hidden-import "dns" ^
                                --hidden-import "dns.dnssec" ^
                                --hidden-import "dns.asyncresolver" ^

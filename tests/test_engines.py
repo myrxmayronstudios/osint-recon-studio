@@ -727,3 +727,93 @@ class TestThemeStyles:
         assert default_fallback == mocha_qss
 
 
+class TestPhase5EngineOverhaul:
+    """Tests for Phase 5 high-speed caching, fast HTTP/2 network, privacy scrubber, and Local AI/Heuristic analyst."""
+
+    def test_cache_manager_ttl(self, tmp_path):
+        import time
+        from osint_studio.core.cache_manager import CacheManager
+
+        db_file = str(tmp_path / "test_cache.db")
+        cm = CacheManager(db_file)
+        # Point existing instance to db_file for the test
+        cm.db_path = db_file
+        cm._init_db()
+        assert cm.get("nonexistent") is None
+
+        cm.set("test_key", {"status": "ok", "value": 42}, ttl_seconds=1.0)
+        cached = cm.get("test_key")
+        assert cached is not None
+        assert cached.get("value") == 42
+
+        # Test expiration
+        time.sleep(1.1)
+        assert cm.get("test_key") is None
+
+        # Test delete and clear
+        cm.set("k1", "v1", ttl_seconds=60)
+        cm.set("k2", "v2", ttl_seconds=60)
+        assert cm.delete("k1") is True
+        assert cm.get("k1") is None
+        assert cm.get("k2") == "v2"
+        cm.clear()
+        assert cm.get("k2") is None
+
+    def test_fast_http_client_singleton(self):
+        from osint_studio.core.fast_network import FastHttpClient
+        client1 = FastHttpClient.get_client()
+        client2 = FastHttpClient.get_client()
+        assert client1 is client2
+        assert not client1.is_closed
+
+    def test_privacy_scrubber_image(self, tmp_path):
+        from PIL import Image
+        from osint_studio.core.personal_osint_suite import PrivacyScrubber
+
+        img_file = tmp_path / "test_photo.png"
+        img = Image.new("RGB", (64, 64), color="blue")
+        img.save(str(img_file))
+
+        success, clean_path, stripped = PrivacyScrubber.scrub_file(str(img_file))
+        assert success is True
+        assert Path(clean_path).exists()
+        assert "clean" in clean_path
+
+    def test_username_permutations_generation(self):
+        from osint_studio.core.personal_osint_suite import generate_username_permutations
+
+        perms = generate_username_permutations("john.smith")
+        assert len(perms) >= 5
+        assert "johnsmith" in perms
+        assert "smithjohn" in perms
+
+    def test_heuristic_analyst_dossier_and_qa(self):
+        from osint_studio.core.local_llm_engine import HeuristicAnalyst, serialize_findings_to_compact_context
+
+        sample_findings = {
+            "target": "acme-corp.com",
+            "dns": {"records": {"A": ["1.2.3.4"], "MX": ["mail.acme-corp.com"]}},
+            "subdomains": {"subdomains": ["dev.acme-corp.com"]},
+            "takeover": {"vulnerabilities": [{"subdomain": "dev.acme-corp.com", "cname": "dead.s3.amazonaws.com", "service": "AWS S3"}]},
+            "internetdb": {"ports": [80, 443, 22], "vulns": ["CVE-2024-9999"]},
+            "email_sec": {"grade": "F", "dmarc_policy": "none", "has_spf": True},
+            "headers": {"missing": ["Content-Security-Policy"]},
+        }
+
+        dossier = HeuristicAnalyst.generate_dossier(sample_findings)
+        assert "EXECUTIVE OSINT INTELLIGENCE DOSSIER" in dossier
+        assert "Dangling CNAME takeover" in dossier
+        assert "CVE-2024-9999" in dossier
+
+        ans_takeover = HeuristicAnalyst.answer_question("What is my takeover risk?", sample_findings)
+        assert "Dangling CNAME Takeover Detected" in ans_takeover
+
+        ans_dmarc = HeuristicAnalyst.answer_question("How do I fix my DMARC record?", sample_findings)
+        assert "DMARC Recommendations" in ans_dmarc
+
+        context = serialize_findings_to_compact_context(sample_findings)
+        assert "acme-corp.com" in context
+        assert "CVE-2024-9999" in context
+
+
+

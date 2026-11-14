@@ -1,5 +1,5 @@
-# 🛡️ OSINT Recon Studio v1.3.1
-### Native Windows Passive OSINT & Domain Attack Surface Auditing Studio + Personal Privacy Suite
+# 🛡️ OSINT Recon Studio v1.4.0
+### Native Windows Passive OSINT, Unified Category Hubs & Ultra-Low-RAM Local AI Analyst
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue?logo=windows)](https://microsoft.com/windows)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)](https://python.org)
@@ -7,14 +7,14 @@
 [![Theme](https://img.shields.io/badge/Themes-Mocha%20%7C%20Monochrome-black)](https://github.com/myrxmayronstudios/osint-recon-studio)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Recon](https://img.shields.io/badge/Recon-Strictly%20Passive-success)](#1-ethical--legal-guardrails)
-[![Tests](https://img.shields.io/badge/Tests-36%20Passed%20%28100%25%29-brightgreen)](#6-running-and-testing)
-[![Download Release](https://img.shields.io/badge/Download%20v1.3.1-Windows%20x64%20%28.zip%29-brightgreen?logo=windows)](https://github.com/myrxmayronstudios/osint-recon-studio/releases/latest)
+[![Tests](https://img.shields.io/badge/Tests-41%20Passed%20%28100%25%29-brightgreen)](#6-running-and-testing)
+[![Download Release](https://img.shields.io/badge/Download%20v1.4.0-Windows%20x64%20%28.zip%29-brightgreen?logo=windows)](https://github.com/myrxmayronstudios/osint-recon-studio/releases/latest)
 
 **OSINT Recon Studio** is an enterprise-grade native Windows desktop application engineered for defensive security auditors, penetration testers, privacy researchers, and domain owners. It delivers comprehensive attack surface auditing and personal digital footprint auditing through **strictly passive, non-intrusive public queries with zero paid API keys required**.
 
-> 📥 **Quick Download:** Grab the pre-compiled, zero-setup standalone executable from **[Releases v1.3.1](https://github.com/myrxmayronstudios/osint-recon-studio/releases/tag/v1.3.1)**. Extract the zip and run `OSINTReconStudio.exe`!
+> 📥 **Quick Download:** Grab the pre-compiled, zero-setup standalone executable from **[Releases v1.4.0](https://github.com/myrxmayronstudios/osint-recon-studio/releases/tag/v1.4.0)**. Extract the zip and run `OSINTReconStudio.exe`!
 
-Featuring a dual-theme graphical interface with instant real-time toggling (`Ctrl+T`) between **Catppuccin Mocha Dark** and **Tactical Monochrome (Pure Grayscale / OLED Black)**, a responsive left navigation sidebar, 19 specialized intelligence & privacy views, non-blocking asynchronous multi-threading, resilient retry logic with fallbacks, high-DPI crisp rendering, desktop shortcut pinning, bootstrap crash prevention, and multi-format report exports into JSON, Markdown, and standalone HTML.
+Featuring a dual-theme graphical interface with instant real-time toggling (`Ctrl+T`) between **Catppuccin Mocha Dark** and **Tactical Monochrome (Pure Grayscale / OLED Black)**, **5 Consolidated Category Hubs**, an **Ultra-Low-RAM (<2 GB RAM) Local AI Intelligence Analyst** with zero-RAM rule-based fallback, **HTTP/2 multiplexing**, **SQLite 24-hour TTL caching** (<50ms repeat lookups), a **Privacy Metadata Scrubber ("Sanitize & Save Clean Copy")**, and multi-format report exports into JSON, Markdown, and standalone HTML.
 
 ---
 
@@ -25,49 +25,46 @@ OSINT Recon Studio strictly observes defensive security principles and legal rec
 - **Strictly Passive Reconnaissance:** Queries **only** publicly advertised DNS records, ICANN/IANA RDAP registries, Certificate Transparency (CT) logs, Shodan's free InternetDB endpoint, URLScan.io public search, AlienVault OTX, Ubuntu/MIT PGP keyservers, GitHub public API, standard HTTP response headers, public manifests, and Internet Archive metadata.
 - **Zero Offensive Vectors:** Does **NOT** conduct port scanning, directory brute-forcing, SQL injection, credential harvesting, vulnerability exploitation, or unauthorized web scraping.
 - **Polite Network Hygiene:** Enforces configurable rate-limiting (default: `2 requests/sec`), strict socket timeouts (`10s`), and a transparent identifying `User-Agent` header (`OSINTReconStudio-PassiveAudit/1.0`).
+- **Zero Cloud Leakage for AI:** The intelligence synthesis engine operates 100% offline using local quantized models (Qwen 2.5 1.5B / LLaMA 3.2 1B) via Ollama, or an instantaneous deterministic 0-RAM Heuristic correlation engine.
 
 ---
 
-## 2. 19 Modular Intelligence & Privacy Views
+## 2. 5 Consolidated Category Hubs
 
-### Domain Attack Surface Reconnaissance (Views 1–16)
-1. **📊 Executive Overview & Scorecard:** Unified domain security scorecard (Grade A+ to F, 0–100 score), high-level metric cards, and prioritized actionable remediation findings.
-2. **🌐 DNS Records & Subdomains:** Standard DNS records (`A`, `AAAA`, `MX`, `NS`, `TXT`, `CNAME`, `SOA`, `CAA`), reverse DNS (PTR), and Certificate Transparency subdomain discovery via `crt.sh` with exponential backoff and HackerTarget passive DNS fallback.
-3. **⚡ Dangling CNAMEs & Subdomain Takeovers:** Resolves CNAME records for discovered subdomains, fingerprints cloud providers (GitHub Pages, AWS S3, Heroku, Azure, Shopify, Ghost, Pantheon, Netlify, Vercel, Fly.io, etc.), and flags high-risk dangling DNS pointers that resolve to `NXDOMAIN`.
-4. **📋 RDAP & Whois Ownership:** Standardized REST queries across authoritative IANA/ICANN RDAP servers. Lifecycle dates (registration, renewal, expiration), registrar details, abuse contacts, EPP status flags, and privacy proxy detection.
-5. **🔍 Passive Exposure (Shodan InternetDB):** Queries Shodan's official, free, zero-key passive lookup endpoint (`https://internetdb.shodan.io/{ip}`) for historical open ports, CPE software identifiers, hostnames, tags, and known CVE references without transmitting a single port-scan packet.
-6. **🌍 IP Geolocation, ASN & Cloud:** Resolves public IP addresses to Autonomous System Numbers (ASN), BGP prefix, ISP/Organization, country/city geolocation, and cloud provider identification (Cloudflare, AWS, Azure, GCP, Akamai).
-7. **🗄️ Threat History (URLScan.io & AlienVault OTX):** Passively retrieves historical scan records, observed IP address transitions, ASN shifts, page titles, and public scan links.
-8. **🛡️ Web Posture & Security Headers:** OWASP security headers analysis (`HSTS`, `CSP`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`), TLS certificate handshake inspection (CN, SANs, issuer, protocol, expiry window), and cookie hygiene flags (`Secure`, `HttpOnly`, `SameSite`).
-9. **✉️ Email Security Posture:** Dedicated anti-spoofing audit computing an overall Email Spoofing Resistance Grade (`A` through `F`):
-   - **SPF:** Validates mechanism enforcement (`-all` vs `~all` vs `?all` vs `+all`), includes chain, and RFC 7208 lookup limits.
-   - **DMARC:** Evaluates policy enforcement (`reject`, `quarantine`, `none`), alignment modes, and reporting URIs (`rua`/`ruf`).
-   - **DKIM Selectors:** Probes common public selectors (`default`, `google`, `selector1`, `k1`, `mail`, etc.) via DNS.
-   - **BIMI & MTA-STS:** Audits Brand Indicators (`_bimi`) and Mail Transfer Agent Strict Transport Security (`_mta-sts` & TLS-RPT).
-10. **⚙️ Tech Stack & Manifests:** Passive web technology fingerprinting (CMS, frontend frameworks, CDNs, analytics) from root page headers/HTML, RFC 9116 `/.well-known/security.txt` vulnerability disclosure metadata, and `/robots.txt` Disallowed paths.
-11. **🐙 GitHub Org & Code Footprint:** Queries GitHub REST API for public organization/user profile, repository inventory, primary languages, star and fork counts, open issues, topics, and presence of a responsible disclosure `SECURITY.md` policy. Supports optional personal access tokens to elevate rate limits from 60 to 5,000 req/hr.
-12. **🔑 Public PGP Keyserver Contacts:** Queries Ubuntu and MIT HKP keyservers (`options=mr`) to passively discover corporate contact names, key IDs, bit lengths, algorithms, and email identities under the target domain.
-13. **👤 Brand / Username Footprint:** Sherlock-style passive brand/handle checker across 20 platforms (GitHub, GitLab, Reddit, HackerNews, Dev.to, PyPI, npm, DockerHub, Crates.io, Medium, Vimeo, Keybase, Gravatar, Wikipedia, Bitbucket, SourceForge, Dribbble, Behance, Telegram, Pastebin) using polite concurrency (`asyncio.Semaphore`).
-14. **📁 Document Metadata Inspector:** Local file inspector tool (PDF, PNG, JPG, TIFF) and public document URL analyzer using `pypdf` and `Pillow`. Extracts author names, creator software, creation timestamps, and Exif camera/software metadata entirely locally without third-party leaks.
-15. **⏳ Wayback Machine History:** Queries Internet Archive Availability and CDX Server APIs for historical inception date, latest snapshot, and sample captures across years.
-16. **📜 Live Activity & JSON:** Real-time color-coded terminal log stream and syntax-formatted raw JSON inspector with one-click clipboard copying.
+Rather than navigating dozens of disconnected tabs, OSINT Recon Studio v1.4.0 groups all capabilities into **5 unified, searchable Category Hubs**:
 
-### Personal Digital Footprint & Self-Privacy Exposure Auditor (Views 17–19)
-17. **📱 Phone Privacy & SIM Linking:**
-    - Uses Google's `phonenumbers` engine to validate numbering plan compliance across all international regions.
-    - Generates multi-format standards: E.164 (`+1650...`), RFC 3966 (`tel:+1-650...`), National, and International.
-    - Identifies carrier name, line type (**Mobile** vs **VoIP/Disposable** vs **Landline**), and geographic exchange center.
-    - Computes a 0–100 Phone Privacy Score (penalizing SIM-swappable mobile numbers without carrier PIN locks) and provides copyable defensive Google search dorks.
-18. **📧 Email & Breach Exposure:**
-    - Validates RFC syntax and verifies MX routing DNS records.
-    - Flags burner / disposable temporary email domains (`mailinator.com`, `temp-mail.org`, etc.).
-    - Computes cryptographic MD5 & SHA-256 hashes used by public avatar services.
-    - Audits public Gravatar & Libravatar profiles to discover publicly leaked real names, avatars, and linked social accounts.
-    - Passively queries the free public XposedOrNot breach API to list historical breach dumps, breach dates, and exposed data classes (passwords, physical addresses, credit cards).
-19. **🌐 Social Footprint & Dossier Linkability:**
-    - Performs unauthenticated OpenGraph metadata inspections across 8 major social networks (**GitHub, Reddit, YouTube, X/Twitter, LinkedIn, Instagram, TikTok, Facebook**).
-    - Extracts `og:title`, `og:description`, and `og:image` without triggering bot blocks or requiring user credentials.
-    - Calculates a 0–100 **Dossier Linkability Score** (scoring high when the same handle links personal, professional, and code identities together) with concrete account-hardening recommendations.
+### 🏛️ Hub 1: Executive Overview & AI Dossier
+- **Unified Security Scorecard & Risk Metrics:** Overall security posture grade (`A+` through `F`, 0–100 score), risk scorecards, and prioritized defensive findings.
+- **Ultra-Low-RAM Local AI Analyst (<2 GB RAM):** Token-by-token streaming executive OSINT intelligence dossier using local 4-bit models (`qwen2.5:1.5b`, `llama3.2:1b`, `qwen2.5:3b`, `phi4-mini`) or zero-RAM deterministic rule-based analysis.
+- **Interactive Offline AI Chat:** Ask follow-up remediation questions (`"How do I fix my DMARC record?"`, `"Which open port is most dangerous?"`) 100% locally with zero internet dependency.
+
+### 🌐 Hub 2: Domain & Infrastructure Hub (Merged)
+- **Unified Real-Time Search & Filter Bar:** Instant filtering across DNS records, subdomains, takeovers, and ownership.
+- **DNS Resource Records:** Standard DNS resolution (`A`, `AAAA`, `MX`, `NS`, `TXT`, `CNAME`, `SOA`, `CAA`) and reverse DNS.
+- **Certificate Transparency Subdomain Discovery:** Comprehensive crt.sh log mapping with HackerTarget passive fallback.
+- **Dangling CNAMEs & Subdomain Takeover Audit:** Fingerprints orphaned CNAME pointers pointing to abandoned cloud services (AWS S3, GitHub Pages, Heroku, Azure, Netlify, etc.) resolving to `NXDOMAIN`.
+- **RDAP / Whois Domain Ownership:** Authoritative ICANN/IANA registry lifecycle, registrar details, and expiration tracking.
+
+### ☁️ Hub 3: Network, Cloud & Threat Exposure Hub (Merged)
+- **Shodan InternetDB Passive Exposure:** Passive enumeration of historical open ports, known CVEs, CPE identifiers, and tags with zero packets sent to target ports.
+- **IP Geolocation, ASN, BGP & Cloud Fingerprinting:** Maps IPs to Autonomous System Numbers, BGP prefixes, ISPs, and major CDN/cloud providers (Cloudflare, AWS, Azure, GCP, Akamai).
+- **Threat Archives (URLScan.io & AlienVault OTX):** Historical passive DNS transitions, ASN shifts, observed IP changes, and public archive links.
+
+### 🛡️ Hub 4: Web & Email Defensive Posture Hub (Merged)
+- **Email Anti-Spoofing & Posture Evaluation:** Dedicated spoofing resistance grade (`A` through `F`) evaluating SPF (`-all` vs `~all`), DMARC policy enforcement (`reject`, `quarantine`, `none`), DKIM selectors, and BIMI.
+- **HTTP Security Headers & TLS Handshake:** OWASP security headers (`HSTS`, `CSP`, `X-Frame-Options`, `Permissions-Policy`), certificate expiry, and cookie hygiene flags.
+- **Technology Stack & Manifests:** Framework and CMS signatures, RFC 9116 `/.well-known/security.txt` disclosure policies, and `/robots.txt` Disallowed entries.
+- **Wayback Machine Historical Milestones:** Historical inception date, snapshot frequencies, and CDX timeline milestones.
+
+### 👤 Hub 5: Personal Data & Digital Footprint Hub (Merged & Expanded)
+- **Email Breach Analytics & Avatar Leaks:** Queries XposedOrNot public zero-key API for breach names, breach dates, and exposed data classes. Checks Gravatar and OpenPGP keyservers for leaked profiles and avatars.
+- **Phone Carrier, VoIP & Messaging Deep Links:** Numbering plan compliance, carrier identification, line type (**Mobile** vs **VoIP/Disposable** vs **Landline**), and clickable verification deep links for WhatsApp (`wa.me`) and Telegram (`t.me`).
+- **40+ Platform Social/Handle Matrix:** Passive handle check across developer, social, and gaming networks with OpenGraph title and metadata extraction.
+- **Smart Username Permutator & Linkability Risk:** Automatically generates handle variations and calculates cross-platform identity linkability risk (0–100).
+- **Document & Photo Privacy Scrubber:** Inspects local media for GPS coordinates and camera serials, featuring a **"Sanitize & Save Clean Copy"** button that strips 100% of metadata.
+
+### 📜 Utility: Live Activity Logs & Raw JSON Inspector
+- Real-time color-coded terminal log stream and syntax-formatted raw JSON inspector with one-click clipboard copying and file export.
 
 ---
 

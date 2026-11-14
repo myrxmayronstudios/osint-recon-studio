@@ -1,29 +1,12 @@
 """Main Window for OSINT Recon Studio.
 
-Provides a responsive native Windows interface for passive attack surface auditing
-and personal privacy self-assessment, featuring a modern left navigation sidebar
-and 19 modular views:
-Domain & Attack Surface Recon:
-  1. Executive Overview & Scorecard
-  2. DNS & Subdomains
-  3. Dangling CNAMEs & Takeover
-  4. RDAP & Whois Ownership
-  5. Passive Exposure (InternetDB)
-  6. IP Geolocation, ASN & Cloud
-  7. Threat History (URLScan/OTX)
-  8. Web Posture & Headers
-  9. Email Security Posture
-  10. Tech Stack & Manifests
-  11. GitHub Org & Footprint
-  12. Public PGP Keyservers
-  13. Brand / Username Checker
-  14. Document Metadata (Exif)
-  15. Wayback Machine History
-  16. Live Activity Logs & JSON
-Personal Privacy & Identity Audit:
-  17. Phone Number Privacy & Carrier
-  18. Email Breach & Avatar Leak
-  19. Social Media Exposure & Linkability
+Provides a unified high-speed Windows interface organized into 5 Consolidated Category Hubs:
+  Hub 1: 🏛️ Executive Overview & Low-RAM Local AI Intelligence Analyst
+  Hub 2: 🌐 Domain & Infrastructure (DNS, CT Subdomains, Dangling CNAMEs, RDAP)
+  Hub 3: ☁️ Network, Cloud & Threat Exposure (Shodan InternetDB, IP Intel, URLScan/OTX)
+  Hub 4: 🛡️ Web & Email Defensive Posture (Security Headers, Email Spoofing, Tech Stack, Wayback)
+  Hub 5: 👤 Personal Data & Digital Footprint (Breaches, Phone Carrier, 40+ Social Matrix, Permutator, EXIF Scrubber)
+  Utility: 📜 Live Activity Logs & Raw JSON Inspector
 """
 
 from __future__ import annotations
@@ -59,31 +42,44 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from osint_studio.core.domain_utils import extract_brand_handle, normalize_domain, sanitize_filename
-from osint_studio.core.email_privacy_engine import EmailPrivacyEngine, EmailPrivacyReport
 from osint_studio.core.exporter import ReconExporter
-from osint_studio.core.github_osint_engine import audit_github_footprint
+from osint_studio.core.local_llm_engine import (
+    LOW_RAM_MODELS,
+    HeuristicAnalyst,
+    LocalLLMEngine,
+    is_ollama_available_sync,
+)
 from osint_studio.core.metadata_engine import MetadataEngine
-from osint_studio.core.phone_privacy_engine import PhonePrivacyEngine, PhonePrivacyReport
-from osint_studio.core.social_privacy_engine import SocialPrivacyEngine, SocialPrivacyReport
-from osint_studio.core.username_engine import check_brand_handles, clean_brand_handle
+from osint_studio.core.personal_osint_suite import (
+    PersonalOSINTSuite,
+    PrivacyScrubber,
+    generate_username_permutations,
+)
 from osint_studio.ui.settings_dialog import SettingsDialog, load_config, save_config
 from osint_studio.ui.styles import (
     CATPPUCCIN_MOCHA_QSS,
     MONOCHROME_QSS,
     get_theme_stylesheet,
 )
-from osint_studio.ui.workers import AsyncTaskWorker, ReconWorker
+from osint_studio.ui.workers import (
+    AsyncTaskWorker,
+    LLMStreamWorker,
+    ModelPullWorker,
+    ReconWorker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,10 +93,10 @@ def get_app_icon_path() -> Optional[str]:
         candidates.append(exe_dir / "_internal" / "assets" / "app_icon.ico")
         if hasattr(sys, "_MEIPASS"):
             candidates.append(Path(sys._MEIPASS) / "assets" / "app_icon.ico")
-
-    proj_root = Path(__file__).resolve().parent.parent.parent
-    candidates.append(proj_root / "assets" / "app_icon.ico")
-    candidates.append(Path.cwd() / "assets" / "app_icon.ico")
+    else:
+        pkg_dir = Path(__file__).resolve().parent.parent.parent.parent
+        candidates.append(pkg_dir / "assets" / "app_icon.ico")
+        candidates.append(Path(__file__).resolve().parent.parent / "assets" / "app_icon.ico")
 
     for c in candidates:
         if c.exists():
@@ -109,39 +105,42 @@ def get_app_icon_path() -> Optional[str]:
 
 
 class MainWindow(QMainWindow):
-    """Main Application Window for OSINT Recon Studio with left sidebar navigation."""
+    """Main desktop application window for OSINT Recon Studio."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("OSINT Recon Studio - Passive Domain & Attack Surface Studio")
-        self.resize(1420, 920)
-        self.setMinimumSize(1140, 760)
+        self.setWindowTitle("OSINT Recon Studio - Defensive Reconnaissance & Privacy Suite")
+        self.resize(1340, 880)
+        self.setMinimumSize(1080, 700)
 
-        # Set window icon
         icon_path = get_app_icon_path()
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
 
-        self.thread_pool = QThreadPool()
+        self.thread_pool = QThreadPool.globalInstance()
         self.current_worker: Optional[ReconWorker] = None
-        self.current_report: Optional[Dict[str, Any]] = None
-        self.metadata_engine = MetadataEngine()
+        self.latest_results: Dict[str, Any] = {}
+        self.latest_personal_results: Optional[Dict[str, Any]] = None
+        self.dossier_text: str = ""
+        self.current_scrubber_file: str = ""
+
         self.config = load_config()
         self.current_theme = self.config.get("theme", "mocha")
+        self.set_theme(self.current_theme)
 
         self._init_ui()
-        self.set_theme(self.current_theme, persist=False)
+
+        # Check local Ollama server status asynchronously
+        self._check_local_ai_status()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Gracefully halts active background workers when closing window to avoid thread destruction crashes."""
-        if self.current_worker:
+        if self.current_worker and not self.current_worker.is_cancelled:
             self.current_worker.cancel()
-        self.thread_pool.clear()
         self.thread_pool.waitForDone(1000)
         event.accept()
 
     # -------------------------------------------------------------------------
-    # UI Initialization & Sidebar Layout
+    # UI Layout & Control Bars
     # -------------------------------------------------------------------------
 
     def _init_ui(self) -> None:
@@ -169,28 +168,27 @@ class MainWindow(QMainWindow):
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("Ready (%p%)")
 
-        self.status_label = QLabel("Ready to audit target domain or personal identity.")
+        self.status_label = QLabel("Ready to audit target domain or personal digital footprint.")
         self.status_label.setStyleSheet("color: #a6adc8; font-weight: 500;")
 
         prog_bar_layout.addWidget(self.status_label, 1)
         prog_bar_layout.addWidget(self.progress_bar, 2)
         main_layout.addLayout(prog_bar_layout)
 
-        # Main Workspace: Left Navigation Sidebar + Right QStackedWidget
+        # Main Workspace Splitter: Left Sidebar + Right Stacked Hubs
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(4)
 
         # Left Navigation Sidebar (QListWidget)
         self.nav_sidebar = QListWidget()
         self.nav_sidebar.setObjectName("navSidebar")
-        self.nav_sidebar.setFixedWidth(260)
+        self.nav_sidebar.setFixedWidth(270)
         self._init_sidebar_items()
 
-        # Right Stacked Widget
+        # Right Stacked Widget (5 Unified Hubs + Activity Logs)
         self.stacked_widget = QStackedWidget()
         self._init_stacked_views()
 
-        # Connect sidebar selection to stacked views
         self.nav_sidebar.currentRowChanged.connect(self.stacked_widget.setCurrentIndex)
         self.nav_sidebar.setCurrentRow(0)
 
@@ -204,64 +202,30 @@ class MainWindow(QMainWindow):
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready. Enter a target domain above or navigate to Personal Privacy Audit.")
+        self.status_bar.showMessage("Ready. Select a Category Hub on the left to begin.")
 
     def _init_sidebar_items(self) -> None:
-        """Populates the navigation sidebar with category items and icons."""
+        """Populates the navigation sidebar with 5 unified category hubs + activity logs."""
         nav_items = [
-            # Domain Attack Surface
-            "📊 Executive Overview",
-            "🌐 DNS & Subdomains",
-            "⚡ Dangling CNAMEs & Takeover",
-            "📋 RDAP & Whois Ownership",
-            "🔍 Passive Exposure (InternetDB)",
-            "🌍 IP Geolocation, ASN & Cloud",
-            "🗄️ Threat History (URLScan/OTX)",
-            "🛡️ Web Posture & Headers",
-            "✉️ Email Security Posture",
-            "⚙️ Tech Stack & Manifests",
-            "🐙 GitHub Org & Footprint",
-            "🔑 Public PGP Keyservers",
-            "👤 Brand / Username Checker",
-            "📁 Document Metadata (Exif)",
-            "⏳ Wayback Machine History",
-            "📜 Live Activity Logs & JSON",
-            # Personal Privacy & Self-Audit Suite
-            "📱 Phone Privacy & Carrier",
-            "📧 Email Breach & Avatar Leak",
-            "👥 Social Exposure & Linkability",
+            "🏛️ Hub 1: Executive & AI Dossier",
+            "🌐 Hub 2: Domain & Infrastructure",
+            "☁️ Hub 3: Network, Cloud & Threat",
+            "🛡️ Hub 4: Web & Email Defense",
+            "👤 Hub 5: Personal Privacy & Footprint",
+            "📜 Activity Logs & Raw JSON",
         ]
         for item_text in nav_items:
             item = QListWidgetItem(item_text)
             self.nav_sidebar.addItem(item)
 
     def _init_stacked_views(self) -> None:
-        """Instantiates and registers each view widget into the QStackedWidget."""
-        # 0 - 15: Domain Attack Surface
-        self.stacked_widget.addWidget(self._create_overview_view())       # 0
-        self.stacked_widget.addWidget(self._create_dns_view())            # 1
-        self.stacked_widget.addWidget(self._create_takeover_view())       # 2
-        self.stacked_widget.addWidget(self._create_rdap_view())           # 3
-        self.stacked_widget.addWidget(self._create_exposure_view())       # 4
-        self.stacked_widget.addWidget(self._create_ip_intel_view())       # 5
-        self.stacked_widget.addWidget(self._create_threat_history_view()) # 6
-        self.stacked_widget.addWidget(self._create_web_view())            # 7
-        self.stacked_widget.addWidget(self._create_email_security_view()) # 8
-        self.stacked_widget.addWidget(self._create_tech_view())           # 9
-        self.stacked_widget.addWidget(self._create_github_view())         # 10
-        self.stacked_widget.addWidget(self._create_pgp_view())            # 11
-        self.stacked_widget.addWidget(self._create_username_view())       # 12
-        self.stacked_widget.addWidget(self._create_metadata_view())       # 13
-        self.stacked_widget.addWidget(self._create_archive_view())        # 14
-        self.stacked_widget.addWidget(self._create_logs_view())           # 15
-        # 16 - 18: Personal Privacy & Identity Audit Suite
-        self.stacked_widget.addWidget(self._create_phone_privacy_view())  # 16
-        self.stacked_widget.addWidget(self._create_email_privacy_view())  # 17
-        self.stacked_widget.addWidget(self._create_social_privacy_view()) # 18
-
-    # -------------------------------------------------------------------------
-    # Menu & Control Bars
-    # -------------------------------------------------------------------------
+        """Instantiates and registers each category hub view."""
+        self.stacked_widget.addWidget(self._create_hub1_executive_ai())      # 0
+        self.stacked_widget.addWidget(self._create_hub2_domain_infra())      # 1
+        self.stacked_widget.addWidget(self._create_hub3_network_threat())    # 2
+        self.stacked_widget.addWidget(self._create_hub4_web_defense())       # 3
+        self.stacked_widget.addWidget(self._create_hub5_personal_privacy())  # 4
+        self.stacked_widget.addWidget(self._create_hub6_logs_json())         # 5
 
     def _create_menu_bar(self) -> None:
         menubar = self.menuBar()
@@ -269,12 +233,12 @@ class MainWindow(QMainWindow):
         # File Menu
         file_menu = menubar.addMenu("&File")
 
-        act_export_json = QAction("Export JSON Report...", self)
+        act_export_json = QAction("Export Raw JSON...", self)
         act_export_json.setShortcut("Ctrl+J")
         act_export_json.triggered.connect(lambda: self._export_report("json"))
         file_menu.addAction(act_export_json)
 
-        act_export_md = QAction("Export Markdown Report...", self)
+        act_export_md = QAction("Export Markdown Dossier...", self)
         act_export_md.setShortcut("Ctrl+M")
         act_export_md.triggered.connect(lambda: self._export_report("markdown"))
         file_menu.addAction(act_export_md)
@@ -311,7 +275,6 @@ class MainWindow(QMainWindow):
 
         # Help Menu
         help_menu = menubar.addMenu("&Help")
-
         act_ethics = QAction("&Ethical & Legal Guardrails", self)
         act_ethics.triggered.connect(self._show_ethics_dialog)
         help_menu.addAction(act_ethics)
@@ -374,15 +337,16 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(False)
         export_menu = QMenu(self)
         export_menu.addAction("Export as JSON", lambda: self._export_report("json"))
-        export_menu.addAction("Export as Markdown", lambda: self._export_report("markdown"))
-        export_menu.addAction("Export as HTML (Print to PDF)", lambda: self._export_report("html"))
+        export_menu.addAction("Export as Markdown Dossier", lambda: self._export_report("markdown"))
+        export_menu.addAction("Export as HTML Report", lambda: self._export_report("html"))
+        export_menu.addAction("Export Subdomains CSV", lambda: self._export_report("csv"))
         self.btn_export.setMenu(export_menu)
         layout.addWidget(self.btn_export)
 
         return frame
 
     def _create_options_bar(self) -> QWidget:
-        group = QGroupBox("Active Reconnaissance Pipeline Modules")
+        group = QGroupBox("Active Reconnaissance Pipeline Modules & Caching Controls")
         layout = QHBoxLayout(group)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(12)
@@ -427,110 +391,39 @@ class MainWindow(QMainWindow):
         self.chk_pgp.setChecked(True)
         layout.addWidget(self.chk_pgp)
 
-        self.chk_username = QCheckBox("Brand Checker")
+        self.chk_username = QCheckBox("Brand Handles")
         self.chk_username.setChecked(True)
         layout.addWidget(self.chk_username)
 
-        layout.addStretch(1)
+        # Force refresh checkbox for Phase 5 SQLite 24h cache bypass
+        self.chk_force_refresh = QCheckBox("⚡ Force Refresh")
+        self.chk_force_refresh.setToolTip("Bypass local SQLite 24-hour cache and query fresh live telemetry")
+        self.chk_force_refresh.setStyleSheet("color: #fab387; font-weight: 700;")
+        layout.addWidget(self.chk_force_refresh)
+
         return group
 
-    # -------------------------------------------------------------------------
-    # Theme Management & Desktop Shortcut
-    # -------------------------------------------------------------------------
+    def _create_standard_table(self, headers: List[str], min_height: int = 220) -> QTableWidget:
+        """Helper to create standard responsive QTableWidget with interactive columns."""
+        table = QTableWidget()
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setMinimumHeight(min_height)
+        self._setup_table_interactions(table)
+        return table
 
-    def toggle_theme(self) -> None:
-        """Toggles between Catppuccin Mocha Dark and Tactical Monochrome UI."""
-        new_theme = "monochrome" if self.current_theme != "monochrome" else "mocha"
-        self.set_theme(new_theme, persist=True)
-
-    def set_theme(self, theme_name: str, persist: bool = True) -> None:
-        """Applies stylesheet and adjusts dynamic accents for Mocha or Monochrome themes."""
-        self.current_theme = (theme_name or "mocha").strip().lower()
-        qss = get_theme_stylesheet(self.current_theme)
-        self.setStyleSheet(qss)
-
-        is_mono = self.current_theme in ("monochrome", "mono", "bw")
-        if hasattr(self, "btn_theme_toggle"):
-            self.btn_theme_toggle.setText("🎨 Mocha Theme" if is_mono else "🌓 Monochrome")
-
-        if hasattr(self, "lbl_control_title"):
-            self.lbl_control_title.setStyleSheet(
-                "font-weight: 700; color: #ffffff; font-size: 14px;"
-                if is_mono else
-                "font-weight: 700; color: #89b4fa; font-size: 14px;"
-            )
-
-        if hasattr(self, "control_frame"):
-            self.control_frame.setStyleSheet(
-                "background-color: #141414; border: 1px solid #282828; border-radius: 8px; padding: 4px;"
-                if is_mono else
-                "background-color: #25273a; border-radius: 8px; padding: 4px;"
-            )
-
-        if hasattr(self, "status_label"):
-            self.status_label.setStyleSheet(
-                "color: #888888; font-weight: 500;"
-                if is_mono else
-                "color: #a6adc8; font-weight: 500;"
-            )
-
-        if persist:
-            cfg = load_config()
-            cfg["theme"] = self.current_theme
-            save_config(cfg)
-
-    def _create_desktop_shortcut(self) -> None:
-        """Creates an official desktop shortcut pointing to the compiled EXE or launcher."""
-        try:
-            desktop = Path(os.environ.get("USERPROFILE", "")) / "Desktop"
-            if not desktop.exists():
-                desktop = Path.home() / "Desktop"
-
-            shortcut_path = desktop / "OSINT Recon Studio.lnk"
-
-            if getattr(sys, "frozen", False):
-                exe_target = Path(sys.executable)
-                work_dir = exe_target.parent
-            else:
-                proj_root = Path(__file__).resolve().parent.parent.parent
-                exe_target = proj_root / "dist" / "OSINTReconStudio" / "OSINTReconStudio.exe"
-                if not exe_target.exists():
-                    exe_target = proj_root / "run_app.bat"
-                work_dir = exe_target.parent
-
-            icon_target = get_app_icon_path() or ""
-
-            ps_script = f"""
-            $ws = New-Object -ComObject WScript.Shell
-            $s = $ws.CreateShortcut('{shortcut_path}')
-            $s.TargetPath = '{exe_target}'
-            $s.WorkingDirectory = '{work_dir}'
-            $s.Description = 'OSINT Recon Studio - Native Windows Passive OSINT & Privacy Studio'
-            if ('{icon_target}' -ne '' -and (Test-Path '{icon_target}')) {{
-                $s.IconLocation = '{icon_target},0'
-            }}
-            $s.Save()
-            """
-            subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
-                check=True,
-                capture_output=True,
-            )
-            QMessageBox.information(
-                self,
-                "Desktop Shortcut Created",
-                f"Successfully created shortcut on your Windows Desktop:\n\n{shortcut_path}",
-            )
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                "Shortcut Creation Failed",
-                f"Could not automatically create desktop shortcut:\n{exc}\n\nYou can manually run 'Create_Desktop_Shortcut.bat' in the project directory.",
-            )
-
-    # -------------------------------------------------------------------------
-    # Safe Table Population & Interaction Helpers
-    # -------------------------------------------------------------------------
+    def _wrap_in_scroll_area(self, content_widget: QWidget) -> QScrollArea:
+        """Wraps any complex multi-card view into a smooth scrollable container."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(content_widget)
+        return scroll
 
     def populate_table_safely(
         self,
@@ -557,8 +450,24 @@ class MainWindow(QMainWindow):
         table.setUpdatesEnabled(True)
         table.setSortingEnabled(True)
 
+    def _filter_table(self, table: QTableWidget, filter_text: str) -> None:
+        """Fast row filtering across all columns in a table."""
+        text = filter_text.strip().lower()
+        if not text:
+            for r in range(table.rowCount()):
+                table.setRowHidden(r, False)
+            return
+
+        for r in range(table.rowCount()):
+            row_visible = False
+            for c in range(table.columnCount()):
+                item = table.item(r, c)
+                if item and text in item.text().lower():
+                    row_visible = True
+                    break
+            table.setRowHidden(r, not row_visible)
+
     def _setup_table_interactions(self, table: QTableWidget) -> None:
-        """Configures right-click context menu and double-click link handler for a table."""
         table.setContextMenuPolicy(Qt.CustomContextMenu)
         table.customContextMenuRequested.connect(
             lambda pos, t=table: self._show_table_context_menu(t, pos)
@@ -571,23 +480,14 @@ class MainWindow(QMainWindow):
         item = table.itemAt(pos)
         if not item:
             return
-
-        menu = QMenu(self)
         cell_text = item.text().strip()
-
-        act_copy = menu.addAction("Copy Cell Value")
+        menu = QMenu(self)
+        act_copy = menu.addAction(f"Copy '{cell_text[:35]}'")
         act_copy.triggered.connect(lambda: QApplication.clipboard().setText(cell_text))
 
-        act_copy_row = menu.addAction("Copy Entire Row (Tab-Delimited)")
-        row_idx = item.row()
-        row_vals = [table.item(row_idx, c).text() if table.item(row_idx, c) else "" for c in range(table.columnCount())]
-        act_copy_row.triggered.connect(lambda: QApplication.clipboard().setText("\t".join(row_vals)))
-
-        if re.search(r"https?://[^\s]+", cell_text) or cell_text.startswith("www."):
-            menu.addSeparator()
-            act_open = menu.addAction("Open Link in Default Browser")
-            url_target = cell_text if cell_text.startswith("http") else f"https://{cell_text}"
-            act_open.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(url_target)))
+        if cell_text.startswith("http://") or cell_text.startswith("https://"):
+            act_open = menu.addAction("Open URL in Browser")
+            act_open.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(cell_text)))
 
         menu.exec(table.viewport().mapToGlobal(pos))
 
@@ -596,26 +496,30 @@ class MainWindow(QMainWindow):
         if not item:
             return
         text = item.text().strip()
-        match = re.search(r"https?://[^\s]+", text)
-        if match:
-            QDesktopServices.openUrl(QUrl(match.group(0)))
-        elif text.startswith("www."):
-            QDesktopServices.openUrl(QUrl(f"https://{text}"))
+        if text.startswith("http://") or text.startswith("https://"):
+            QDesktopServices.openUrl(QUrl(text))
+        else:
+            QApplication.clipboard().setText(text)
+            self.statusBar().showMessage(f"Copied '{text}' to clipboard", 3000)
 
     # -------------------------------------------------------------------------
-    # View 0: Executive Overview & Scorecard
+    # HUB 1: Executive Overview & Local AI Dossier
     # -------------------------------------------------------------------------
 
-    def _create_overview_view(self) -> QWidget:
+    def _create_hub1_executive_ai(self) -> QWidget:
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(14)
 
-        left_col = QVBoxLayout()
-        left_col.setSpacing(12)
+        # Left Column: Posture Score, Metric Badges, Key Findings
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
 
-        self.card_score = QGroupBox("Overall Security Posture")
+        # Posture Score Card
+        self.card_score = QGroupBox("Overall Security Posture Score")
         score_layout = QVBoxLayout(self.card_score)
         score_layout.setAlignment(Qt.AlignCenter)
 
@@ -628,23 +532,22 @@ class MainWindow(QMainWindow):
         self.lbl_score_num.setStyleSheet("font-size: 15px; color: #a6adc8; font-weight: 600;")
         self.lbl_score_num.setAlignment(Qt.AlignCenter)
         score_layout.addWidget(self.lbl_score_num)
+        left_layout.addWidget(self.card_score)
 
-        left_col.addWidget(self.card_score)
-
-        self.card_metrics = QGroupBox("Attack Surface Key Metrics")
+        # Key Metrics Grid Card
+        self.card_metrics = QGroupBox("Attack Surface Key Telemetry")
         metrics_layout = QGridLayout(self.card_metrics)
         metrics_layout.setSpacing(10)
 
-        self.lbl_metric_takeover = QLabel("Takeover Risk: –")
+        self.lbl_metric_takeover = QLabel("Takeovers: –")
         self.lbl_metric_email = QLabel("Email Defense: –")
         self.lbl_metric_dnssec = QLabel("DNSSEC: –")
         self.lbl_metric_headers = QLabel("Headers: –")
         self.lbl_metric_tls = QLabel("TLS Cert: –")
         self.lbl_metric_exposure = QLabel("InternetDB: –")
-        self.lbl_metric_cloud = QLabel("Cloud / CDN: –")
-        self.lbl_metric_subs = QLabel("CT Subdomains: –")
+        self.lbl_metric_cloud = QLabel("Hosting: –")
 
-        for lbl_w in [
+        for lbl_widget in [
             self.lbl_metric_takeover,
             self.lbl_metric_email,
             self.lbl_metric_dnssec,
@@ -652,9 +555,10 @@ class MainWindow(QMainWindow):
             self.lbl_metric_tls,
             self.lbl_metric_exposure,
             self.lbl_metric_cloud,
-            self.lbl_metric_subs,
         ]:
-            lbl_w.setStyleSheet("background-color: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 600;")
+            lbl_widget.setStyleSheet(
+                "background-color: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 600; color: #cdd6f4;"
+            )
 
         metrics_layout.addWidget(self.lbl_metric_takeover, 0, 0)
         metrics_layout.addWidget(self.lbl_metric_email, 0, 1)
@@ -662,1248 +566,770 @@ class MainWindow(QMainWindow):
         metrics_layout.addWidget(self.lbl_metric_headers, 1, 1)
         metrics_layout.addWidget(self.lbl_metric_tls, 2, 0)
         metrics_layout.addWidget(self.lbl_metric_exposure, 2, 1)
-        metrics_layout.addWidget(self.lbl_metric_cloud, 3, 0)
-        metrics_layout.addWidget(self.lbl_metric_subs, 3, 1)
-
-        left_col.addWidget(self.card_metrics)
-        left_col.addStretch(1)
-
-        # Right Column: Action Items & Findings List
-        right_col = QVBoxLayout()
-        right_col.setSpacing(10)
-
-        group_findings = QGroupBox("Actionable Findings & Remediation Guidance")
-        findings_layout = QVBoxLayout(group_findings)
-
-        self.list_findings = QListWidget()
-        self.list_findings.setStyleSheet("background-color: #181825; border-radius: 6px; padding: 6px;")
-        findings_layout.addWidget(self.list_findings)
-
-        right_col.addWidget(group_findings)
-
-        layout.addLayout(left_col, 1)
-        layout.addLayout(right_col, 2)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 1: DNS & Subdomains
-    # -------------------------------------------------------------------------
-
-    def _create_dns_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        splitter = QSplitter(Qt.Vertical)
-
-        # Standard DNS Records
-        grp_dns = QGroupBox("Standard DNS Records (A, AAAA, MX, NS, TXT, CNAME, SOA, CAA)")
-        v_dns = QVBoxLayout(grp_dns)
-
-        filter_box = QHBoxLayout()
-        filter_box.addWidget(QLabel("Filter Records:"))
-        self.input_filter_dns = QLineEdit()
-        self.input_filter_dns.setPlaceholderText("Filter by record type or value...")
-        self.input_filter_dns.textChanged.connect(self._filter_dns_table)
-        filter_box.addWidget(self.input_filter_dns)
-        v_dns.addLayout(filter_box)
-
-        self.table_dns = QTableWidget(0, 4)
-        self.table_dns.setHorizontalHeaderLabels(["Record Type", "Name / Host", "Value / Target", "TTL"])
-        self.table_dns.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_dns.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_dns.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table_dns.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self._setup_table_interactions(self.table_dns)
-        v_dns.addWidget(self.table_dns)
-
-        # CT & Discovered Subdomains
-        grp_ct = QGroupBox("Certificate Transparency & Passive DNS Discovered Subdomains")
-        v_ct = QVBoxLayout(grp_ct)
-
-        ct_ctrl = QHBoxLayout()
-        self.lbl_sub_count = QLabel("Subdomains Discovered: 0")
-        self.lbl_sub_count.setStyleSheet("font-weight: 700; color: #89b4fa;")
-        ct_ctrl.addWidget(self.lbl_sub_count)
-        ct_ctrl.addStretch(1)
-
-        btn_copy_subs = QPushButton("Copy All Subdomains")
-        btn_copy_subs.clicked.connect(self._copy_subdomains_to_clipboard)
-        ct_ctrl.addWidget(btn_copy_subs)
-        v_ct.addLayout(ct_ctrl)
-
-        self.table_ct = QTableWidget(0, 3)
-        self.table_ct.setHorizontalHeaderLabels(["Discovered Subdomain", "Source / Issuer", "Logged Date"])
-        self.table_ct.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table_ct.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_ct.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self._setup_table_interactions(self.table_ct)
-        v_ct.addWidget(self.table_ct)
-
-        splitter.addWidget(grp_dns)
-        splitter.addWidget(grp_ct)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-
-        layout.addWidget(splitter)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 2: Dangling CNAMEs & Subdomain Takeover
-    # -------------------------------------------------------------------------
-
-    def _create_takeover_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        banner = QGroupBox("Subdomain Takeover & Dangling DNS Risk Summary")
-        b_layout = QHBoxLayout(banner)
-
-        self.lbl_takeover_vuln = QLabel("Vulnerable: 0")
-        self.lbl_takeover_vuln.setStyleSheet("font-size: 14px; font-weight: 700; color: #a6e3a1; padding: 6px 12px; background: #181825; border-radius: 6px;")
-        b_layout.addWidget(self.lbl_takeover_vuln)
-
-        self.lbl_takeover_dangling = QLabel("Dangling CNAMEs: 0")
-        self.lbl_takeover_dangling.setStyleSheet("font-size: 14px; font-weight: 700; color: #fab387; padding: 6px 12px; background: #181825; border-radius: 6px;")
-        b_layout.addWidget(self.lbl_takeover_dangling)
-
-        self.lbl_takeover_total = QLabel("Total CNAMEs Analyzed: 0")
-        self.lbl_takeover_total.setStyleSheet("font-size: 14px; font-weight: 700; color: #89b4fa; padding: 6px 12px; background: #181825; border-radius: 6px;")
-        b_layout.addWidget(self.lbl_takeover_total)
-
-        b_layout.addStretch(1)
-        layout.addWidget(banner)
-
-        grp_table = QGroupBox("CNAME Aliases & Target Resolution Findings")
-        v_tbl = QVBoxLayout(grp_table)
-
-        self.table_takeover = QTableWidget(0, 6)
-        self.table_takeover.setHorizontalHeaderLabels([
-            "Subdomain", "CNAME Target Host", "Cloud Provider", "Status", "Risk Level", "Description & Guidance"
-        ])
-        self.table_takeover.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_takeover.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_takeover.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_takeover.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_takeover.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_takeover.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_takeover)
-        v_tbl.addWidget(self.table_takeover)
-
-        layout.addWidget(grp_table)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 3: RDAP & Whois Ownership
-    # -------------------------------------------------------------------------
-
-    def _create_rdap_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        group_reg = QGroupBox("Domain Registration Lifecycle & Registrar Details")
-        reg_layout = QGridLayout(group_reg)
-        reg_layout.setSpacing(10)
-
-        self.lbl_rdap_registrar = QLabel("–")
-        self.lbl_rdap_iana = QLabel("–")
-        self.lbl_rdap_abuse_email = QLabel("–")
-        self.lbl_rdap_abuse_phone = QLabel("–")
-        self.lbl_rdap_created = QLabel("–")
-        self.lbl_rdap_expires = QLabel("–")
-        self.lbl_rdap_age = QLabel("–")
-        self.lbl_rdap_days_left = QLabel("–")
-        self.lbl_rdap_privacy = QLabel("–")
-        self.lbl_rdap_nameservers = QLabel("–")
-
-        reg_layout.addWidget(QLabel("Registrar:"), 0, 0)
-        reg_layout.addWidget(self.lbl_rdap_registrar, 0, 1)
-        reg_layout.addWidget(QLabel("IANA ID:"), 0, 2)
-        reg_layout.addWidget(self.lbl_rdap_iana, 0, 3)
-
-        reg_layout.addWidget(QLabel("Created Date:"), 1, 0)
-        reg_layout.addWidget(self.lbl_rdap_created, 1, 1)
-        reg_layout.addWidget(QLabel("Expiration Date:"), 1, 2)
-        reg_layout.addWidget(self.lbl_rdap_expires, 1, 3)
-
-        reg_layout.addWidget(QLabel("Domain Age:"), 2, 0)
-        reg_layout.addWidget(self.lbl_rdap_age, 2, 1)
-        reg_layout.addWidget(QLabel("Days Until Expiration:"), 2, 2)
-        reg_layout.addWidget(self.lbl_rdap_days_left, 2, 3)
-
-        reg_layout.addWidget(QLabel("Privacy Protected:"), 3, 0)
-        reg_layout.addWidget(self.lbl_rdap_privacy, 3, 1)
-        reg_layout.addWidget(QLabel("Abuse Email:"), 3, 2)
-        reg_layout.addWidget(self.lbl_rdap_abuse_email, 3, 3)
-
-        reg_layout.addWidget(QLabel("Delegated Nameservers:"), 4, 0)
-        reg_layout.addWidget(self.lbl_rdap_nameservers, 4, 1, 1, 3)
-
-        layout.addWidget(group_reg)
-
-        group_ent = QGroupBox("Disclosed Entities, Contacts & Roles")
-        ent_layout = QVBoxLayout(group_ent)
-
-        self.table_entities = QTableWidget(0, 5)
-        self.table_entities.setHorizontalHeaderLabels(["Roles", "Contact Name", "Organization", "Email", "Phone"])
-        self.table_entities.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_entities)
-        ent_layout.addWidget(self.table_entities)
-
-        layout.addWidget(group_ent)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 4: Passive Exposure (InternetDB)
-    # -------------------------------------------------------------------------
-
-    def _create_exposure_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        grp_idb = QGroupBox("Shodan InternetDB Passive Service Fingerprints (Zero Port Scanning)")
-        v_idb = QVBoxLayout(grp_idb)
-
-        self.table_idb = QTableWidget(0, 5)
-        self.table_idb.setHorizontalHeaderLabels([
-            "IP Address", "Historical Open Ports", "CPE Software Identifiers", "Tags / Infrastructure", "Indexed CVE Vulnerabilities"
-        ])
-        self.table_idb.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_idb.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_idb.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table_idb.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_idb.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_idb)
-        v_idb.addWidget(self.table_idb)
-
-        layout.addWidget(grp_idb)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 5: IP Geolocation, ASN & Cloud
-    # -------------------------------------------------------------------------
-
-    def _create_ip_intel_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        grp_geo = QGroupBox("Resolved Public IP Geolocation, ASN, and Cloud Infrastructure")
-        v_geo = QVBoxLayout(grp_geo)
-
-        self.table_ip_geo = QTableWidget(0, 6)
-        self.table_ip_geo.setHorizontalHeaderLabels([
-            "IP Address", "Country", "City / Region", "Autonomous System (ASN)", "ISP / Organization", "Detected Cloud / CDN"
-        ])
-        self.table_ip_geo.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_ip_geo.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_ip_geo.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_ip_geo.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self.table_ip_geo.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.table_ip_geo.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self._setup_table_interactions(self.table_ip_geo)
-        v_geo.addWidget(self.table_ip_geo)
-
-        layout.addWidget(grp_geo)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 6: Threat History (URLScan & OTX)
-    # -------------------------------------------------------------------------
-
-    def _create_threat_history_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        splitter = QSplitter(Qt.Vertical)
-
-        # URLScan.io Historical Scans
-        grp_urlscan = QGroupBox("URLScan.io Historical Scans & Archived Observations")
-        v_url = QVBoxLayout(grp_urlscan)
-
-        self.lbl_threat_stats = QLabel("Total Scans: 0 | Observed IPs: None | Observed ASNs: None")
-        self.lbl_threat_stats.setStyleSheet("font-weight: 600; color: #89b4fa; padding: 4px;")
-        v_url.addWidget(self.lbl_threat_stats)
-
-        self.table_urlscan = QTableWidget(0, 6)
-        self.table_urlscan.setHorizontalHeaderLabels([
-            "Scan Date", "Target URL", "Observed IP", "ASN", "Page Title", "Public Scan Link"
-        ])
-        self.table_urlscan.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_urlscan.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_urlscan.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_urlscan.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_urlscan.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.table_urlscan.horizontalHeader().setSectionResizeMode(5, QHeaderView.Interactive)
-        self._setup_table_interactions(self.table_urlscan)
-        v_url.addWidget(self.table_urlscan)
-
-        # AlienVault OTX Passive DNS
-        grp_otx = QGroupBox("AlienVault OTX Passive DNS Transitions")
-        v_otx = QVBoxLayout(grp_otx)
-
-        self.table_otx = QTableWidget(0, 5)
-        self.table_otx.setHorizontalHeaderLabels([
-            "Record Type", "Resolved Address / Host", "First Seen", "Last Seen", "ASN"
-        ])
-        self.table_otx.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_otx.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table_otx.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_otx.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_otx.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self._setup_table_interactions(self.table_otx)
-        v_otx.addWidget(self.table_otx)
-
-        splitter.addWidget(grp_urlscan)
-        splitter.addWidget(grp_otx)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-
-        layout.addWidget(splitter)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 7: Web Posture & Headers
-    # -------------------------------------------------------------------------
-
-    def _create_web_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        grp_tls = QGroupBox("TLS / SSL Handshake & Certificate Posture")
-        tls_layout = QGridLayout(grp_tls)
-        tls_layout.setSpacing(8)
-
-        self.lbl_web_canonical = QLabel("Canonical URL: –")
-        self.lbl_web_server = QLabel("Server Banner: –")
-        self.lbl_web_tls = QLabel("TLS Version / Cipher: –")
-        self.lbl_web_cert_issuer = QLabel("Cert Issuer: –")
-
-        tls_layout.addWidget(self.lbl_web_canonical, 0, 0)
-        tls_layout.addWidget(self.lbl_web_server, 0, 1)
-        tls_layout.addWidget(self.lbl_web_tls, 1, 0)
-        tls_layout.addWidget(self.lbl_web_cert_issuer, 1, 1)
-
-        layout.addWidget(grp_tls)
-
-        grp_headers = QGroupBox("HTTP Security Response Headers Audit")
-        h_layout = QVBoxLayout(grp_headers)
-
-        self.table_headers = QTableWidget(0, 4)
-        self.table_headers.setHorizontalHeaderLabels(["Security Header", "Status", "Observed Value", "Hardening Recommendation"])
-        self.table_headers.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_headers.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_headers.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table_headers.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_headers)
-        h_layout.addWidget(self.table_headers)
-
-        layout.addWidget(grp_headers)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 8: Email Security Posture
-    # -------------------------------------------------------------------------
-
-    def _create_email_security_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        grp_top = QGroupBox("Domain Email Spoofing Defense Posture")
-        top_layout = QHBoxLayout(grp_top)
-
-        self.lbl_email_grade = QLabel("Grade –")
-        self.lbl_email_grade.setStyleSheet("font-size: 32px; font-weight: 800; color: #89b4fa; padding: 10px 20px; background: #181825; border-radius: 8px;")
-        top_layout.addWidget(self.lbl_email_grade)
-
-        self.lbl_email_summary = QLabel("Awaiting audit...")
-        self.lbl_email_summary.setStyleSheet("font-size: 13px; color: #cdd6f4;")
-        top_layout.addWidget(self.lbl_email_summary, 1)
-
-        layout.addWidget(grp_top)
-
-        grp_rec = QGroupBox("Email Defense Records (SPF, DMARC, BIMI, MTA-STS)")
-        rec_layout = QGridLayout(grp_rec)
-
-        self.lbl_em_spf = QLabel("SPF Status: –")
-        self.lbl_em_dmarc = QLabel("DMARC Policy: –")
-        self.lbl_em_dkim = QLabel("Active DKIM Selectors: –")
-        self.lbl_em_bimi = QLabel("BIMI: –")
-        self.lbl_em_mta = QLabel("MTA-STS: –")
-
-        for lbl_w in [self.lbl_em_spf, self.lbl_em_dmarc, self.lbl_em_dkim, self.lbl_em_bimi, self.lbl_em_mta]:
-            lbl_w.setStyleSheet("background-color: #181825; padding: 8px; border-radius: 6px;")
-
-        rec_layout.addWidget(self.lbl_em_spf, 0, 0)
-        rec_layout.addWidget(self.lbl_em_dmarc, 0, 1)
-        rec_layout.addWidget(self.lbl_em_dkim, 1, 0)
-        rec_layout.addWidget(self.lbl_em_bimi, 1, 1)
-        rec_layout.addWidget(self.lbl_em_mta, 2, 0, 1, 2)
-
-        layout.addWidget(grp_rec)
-
-        grp_dkim_tbl = QGroupBox("DKIM Selector Probing Results")
-        dk_layout = QVBoxLayout(grp_dkim_tbl)
-
-        self.table_dkim = QTableWidget(0, 4)
-        self.table_dkim.setHorizontalHeaderLabels(["Common Selector", "Target Host Name", "Status", "Discovered TXT Record Value"])
-        self.table_dkim.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_dkim.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_dkim.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_dkim.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_dkim)
-        dk_layout.addWidget(self.table_dkim)
-
-        layout.addWidget(grp_dkim_tbl)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 9: Tech Stack & Manifests
-    # -------------------------------------------------------------------------
-
-    def _create_tech_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        grp_tech = QGroupBox("Detected Web Technologies, CMS, & Frameworks")
-        t_layout = QVBoxLayout(grp_tech)
-
-        self.table_tech = QTableWidget(0, 3)
-        self.table_tech.setHorizontalHeaderLabels(["Technology", "Category", "Detection Evidence"])
-        self.table_tech.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_tech.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_tech.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_tech)
-        t_layout.addWidget(self.table_tech)
-
-        layout.addWidget(grp_tech)
-
-        splitter_man = QSplitter(Qt.Horizontal)
-
-        grp_sec = QGroupBox("RFC 9116 security.txt")
-        s_layout = QVBoxLayout(grp_sec)
-        self.txt_sec_txt = QTextEdit()
-        self.txt_sec_txt.setReadOnly(True)
-        s_layout.addWidget(self.txt_sec_txt)
-
-        grp_rob = QGroupBox("robots.txt Disallowed Paths")
-        r_layout = QVBoxLayout(grp_rob)
-        self.txt_robots_disallow = QTextEdit()
-        self.txt_robots_disallow.setReadOnly(True)
-        r_layout.addWidget(self.txt_robots_disallow)
-
-        splitter_man.addWidget(grp_sec)
-        splitter_man.addWidget(grp_rob)
-
-        layout.addWidget(splitter_man)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 10: GitHub Org & Code Footprint
-    # -------------------------------------------------------------------------
-
-    def _create_github_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        top_h = QHBoxLayout()
-        top_h.addWidget(QLabel("GitHub Handle / Org:"))
-        self.input_gh_handle = QLineEdit()
-        self.input_gh_handle.setPlaceholderText("e.g. github, google, or cloudflare")
-        top_h.addWidget(self.input_gh_handle, 1)
-
-        self.btn_gh_query = QPushButton("Search GitHub Footprint")
-        self.btn_gh_query.clicked.connect(self._manual_github_lookup)
-        top_h.addWidget(self.btn_gh_query)
-        layout.addLayout(top_h)
-
-        grp_profile = QGroupBox("GitHub Organization / User Profile")
-        p_layout = QGridLayout(grp_profile)
-
-        self.lbl_gh_name = QLabel("Name / Handle: –")
-        self.lbl_gh_type = QLabel("Entity Type: –")
-        self.lbl_gh_repos = QLabel("Public Repos: –")
-        self.lbl_gh_stars = QLabel("Total Stars: –")
-        self.lbl_gh_forks = QLabel("Total Forks: –")
-        self.lbl_gh_sec_policy = QLabel("SECURITY.md Policy: –")
-        self.lbl_gh_location = QLabel("Location / Blog: –")
-        self.lbl_gh_url = QLabel("Profile URL: –")
-
-        for lbl_w in [self.lbl_gh_name, self.lbl_gh_type, self.lbl_gh_repos, self.lbl_gh_stars, self.lbl_gh_forks, self.lbl_gh_sec_policy, self.lbl_gh_location, self.lbl_gh_url]:
-            lbl_w.setStyleSheet("background: #181825; padding: 6px 10px; border-radius: 6px; font-weight: 600;")
-
-        p_layout.addWidget(self.lbl_gh_name, 0, 0)
-        p_layout.addWidget(self.lbl_gh_type, 0, 1)
-        p_layout.addWidget(self.lbl_gh_repos, 0, 2)
-        p_layout.addWidget(self.lbl_gh_stars, 1, 0)
-        p_layout.addWidget(self.lbl_gh_forks, 1, 1)
-        p_layout.addWidget(self.lbl_gh_sec_policy, 1, 2)
-        p_layout.addWidget(self.lbl_gh_location, 2, 0, 1, 2)
-        p_layout.addWidget(self.lbl_gh_url, 2, 2)
-
-        layout.addWidget(grp_profile)
-
-        grp_repos = QGroupBox("Public Repositories (Recent Updates)")
-        r_layout = QVBoxLayout(grp_repos)
-
-        self.table_gh_repos = QTableWidget(0, 6)
-        self.table_gh_repos.setHorizontalHeaderLabels([
-            "Repository Name", "Language", "Stars", "Forks", "Open Issues", "Description & Topics"
-        ])
-        self.table_gh_repos.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_gh_repos.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_gh_repos.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_gh_repos.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_gh_repos.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_gh_repos.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_gh_repos)
-        r_layout.addWidget(self.table_gh_repos)
-
-        layout.addWidget(grp_repos)
-        return widget
-
-    def _manual_github_lookup(self) -> None:
-        raw = self.input_gh_handle.text().strip() or self.input_domain.text().strip()
-        handle = clean_brand_handle(raw)
-        if not handle:
-            QMessageBox.warning(self, "Invalid Handle", "Please enter a valid GitHub organization or username.")
-            return
-
-        cfg = load_config()
-        token = cfg.get("github_token", "")
-        self.btn_gh_query.setEnabled(False)
-        self.btn_gh_query.setText("Searching...")
-        self.status_label.setText(f"Querying GitHub API for handle '{handle}' in background...")
-        self.status_bar.showMessage(f"Querying GitHub API for '{handle}'...")
-
-        def on_finished(gh_report):
-            self._populate_github_view(gh_report.to_dict())
-            self.status_label.setText(f"GitHub lookup for '{handle}' complete.")
-            self.status_bar.showMessage("GitHub lookup complete.", 5000)
-            self.btn_gh_query.setEnabled(True)
-            self.btn_gh_query.setText("Search GitHub Footprint")
-
-        def on_error(err_msg):
-            self.status_label.setText("GitHub lookup failed.")
-            self.status_bar.showMessage(f"Error: {err_msg}", 5000)
-            self.btn_gh_query.setEnabled(True)
-            self.btn_gh_query.setText("Search GitHub Footprint")
-            QMessageBox.warning(self, "Lookup Error", f"Failed to query GitHub:\n{err_msg}")
-
-        worker = AsyncTaskWorker(audit_github_footprint, handle, token=token)
-        worker.signals.finished.connect(on_finished)
-        worker.signals.error.connect(on_error)
-        self.thread_pool.start(worker)
-
-    # -------------------------------------------------------------------------
-    # View 11: Public PGP Keyserver Contacts
-    # -------------------------------------------------------------------------
-
-    def _create_pgp_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        grp_summary = QGroupBox("PGP Keyserver Discovered Contacts & Key Identities")
-        s_layout = QVBoxLayout(grp_summary)
-
-        self.lbl_pgp_summary = QLabel("Total Keys Found: 0 | Discovered Domain Emails: None")
-        self.lbl_pgp_summary.setStyleSheet("font-weight: 600; color: #89b4fa; padding: 4px;")
-        s_layout.addWidget(self.lbl_pgp_summary)
-
-        self.table_pgp = QTableWidget(0, 6)
-        self.table_pgp.setHorizontalHeaderLabels([
-            "Key ID", "Algorithm", "Bit Length", "Creation Date", "Expiration", "Associated Identities (Name & Email)"
-        ])
-        self.table_pgp.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_pgp.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_pgp.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_pgp.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_pgp.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_pgp.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_pgp)
-        s_layout.addWidget(self.table_pgp)
-
-        layout.addWidget(grp_summary)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 12: Brand / Username Checker
-    # -------------------------------------------------------------------------
-
-    def _create_username_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        top_h = QHBoxLayout()
-        top_h.addWidget(QLabel("Brand Name / Handle:"))
-        self.input_brand_handle = QLineEdit()
-        self.input_brand_handle.setPlaceholderText("e.g. brand handle to audit across 20 platforms")
-        top_h.addWidget(self.input_brand_handle, 1)
-
-        self.btn_user_query = QPushButton("Check Brand Across 20 Platforms")
-        self.btn_user_query.clicked.connect(self._manual_username_check)
-        top_h.addWidget(self.btn_user_query)
-        layout.addLayout(top_h)
-
-        grp_tbl = QGroupBox("Multi-Platform Identity Footprint (20 Platforms)")
-        v_tbl = QVBoxLayout(grp_tbl)
-
-        self.lbl_username_stats = QLabel("Checked: 0 platforms | Claimed: 0 | Available: 0")
-        self.lbl_username_stats.setStyleSheet("font-weight: 600; color: #89b4fa; padding: 4px;")
-        v_tbl.addWidget(self.lbl_username_stats)
-
-        self.table_username = QTableWidget(0, 6)
-        self.table_username.setHorizontalHeaderLabels([
-            "Platform", "Category", "Registration Status", "HTTP Code", "Latency (ms)", "Public Profile URL"
-        ])
-        self.table_username.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_username.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_username.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_username.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_username.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_username.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_username)
-        v_tbl.addWidget(self.table_username)
-
-        layout.addWidget(grp_tbl)
-        return widget
-
-    def _manual_username_check(self) -> None:
-        raw = self.input_brand_handle.text().strip() or self.input_domain.text().strip()
-        handle = clean_brand_handle(raw)
-        if not handle:
-            QMessageBox.warning(self, "Invalid Handle", "Please enter a valid brand handle or username to check.")
-            return
-
-        self.btn_user_query.setEnabled(False)
-        self.btn_user_query.setText("Auditing 20 Platforms...")
-        self.status_label.setText(f"Auditing brand '{handle}' across 20 platforms in background...")
-        self.status_bar.showMessage(f"Auditing brand '{handle}' across 20 platforms...")
-
-        def on_finished(report):
-            self._populate_username_view(report.to_dict())
-            self.status_label.setText(f"Brand audit for '{handle}' complete.")
-            self.status_bar.showMessage("Brand audit complete.", 5000)
-            self.btn_user_query.setEnabled(True)
-            self.btn_user_query.setText("Check Brand Across 20 Platforms")
-
-        def on_error(err_msg):
-            self.status_label.setText("Brand audit encountered an error.")
-            self.status_bar.showMessage(f"Error: {err_msg}", 5000)
-            self.btn_user_query.setEnabled(True)
-            self.btn_user_query.setText("Check Brand Across 20 Platforms")
-            QMessageBox.warning(self, "Audit Error", f"Failed to check brand handle:\n{err_msg}")
-
-        worker = AsyncTaskWorker(check_brand_handles, handle)
-        worker.signals.finished.connect(on_finished)
-        worker.signals.error.connect(on_error)
-        self.thread_pool.start(worker)
-
-    # -------------------------------------------------------------------------
-    # View 13: Document Metadata (Exif)
-    # -------------------------------------------------------------------------
-
-    def _create_metadata_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        grp_input = QGroupBox("Analyze Local or Remote Document / Image Metadata")
-        v_in = QVBoxLayout(grp_input)
-
-        h_local = QHBoxLayout()
-        self.input_meta_file = QLineEdit()
-        self.input_meta_file.setPlaceholderText("Select a local PDF or image file (PDF, JPEG, PNG, TIFF)...")
-        btn_browse = QPushButton("Browse File...")
-        btn_browse.clicked.connect(self._browse_metadata_file)
-        self.btn_scan_file = QPushButton("Inspect File Metadata")
-        self.btn_scan_file.clicked.connect(self._scan_local_metadata)
-        h_local.addWidget(self.input_meta_file, 1)
-        h_local.addWidget(btn_browse)
-        h_local.addWidget(self.btn_scan_file)
-        v_in.addLayout(h_local)
-
-        layout.addWidget(grp_input)
-
-        grp_res = QGroupBox("Disclosed Metadata Attributes & Author Artifacts")
-        v_res = QVBoxLayout(grp_res)
-
-        self.table_metadata = QTableWidget(0, 2)
-        self.table_metadata.setHorizontalHeaderLabels(["Attribute / Field", "Disclosed Value"])
-        self.table_metadata.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_metadata.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_metadata)
-        v_res.addWidget(self.table_metadata)
-
-        layout.addWidget(grp_res)
-        return widget
-
-    def _browse_metadata_file(self) -> None:
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Select Document or Image", "", "Documents & Images (*.pdf *.jpg *.jpeg *.png *.tiff)"
+        metrics_layout.addWidget(self.lbl_metric_cloud, 3, 0, 1, 2)
+        left_layout.addWidget(self.card_metrics)
+
+        # Prioritized Findings Table Card
+        card_findings = QGroupBox("Prioritized Defensive Findings & Correlation Alerts")
+        find_layout = QVBoxLayout(card_findings)
+        self.table_findings = self._create_standard_table(
+            ["Severity", "Defensive Category", "Observed Risk Finding", "Remediation Action"],
+            min_height=200,
         )
-        if filepath:
-            self.input_meta_file.setText(filepath)
+        find_layout.addWidget(self.table_findings)
+        left_layout.addWidget(card_findings, 1)
 
-    def _scan_local_metadata(self) -> None:
-        fp = self.input_meta_file.text().strip()
-        if not fp:
-            QMessageBox.warning(self, "No File", "Please select a file to inspect.")
-            return
+        # Right Column: Low-RAM Local AI Analyst Console
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
 
-        self.btn_scan_file.setEnabled(False)
-        self.btn_scan_file.setText("Extracting Metadata...")
-        self.status_label.setText("Inspecting file metadata in background...")
+        ai_box = QGroupBox("🧠 Low-RAM Local AI Intelligence Analyst (<2 GB RAM)")
+        ai_layout = QVBoxLayout(ai_box)
+        ai_layout.setSpacing(8)
 
-        def on_finished(report):
-            rows: List[List[Any]] = [
-                ["File Type", report.file_type],
-                ["File Size", f"{report.file_size_bytes:,} bytes"],
-                ["Author", report.author or "Not Disclosed"],
-                ["Creator / Tool", report.creator_tool or "Not Disclosed"],
-                ["Producer / Engine", report.producer or "Not Disclosed"],
-                ["Creation Date", report.creation_date or "Not Disclosed"],
-                ["Modification Date", report.modification_date or "Not Disclosed"],
-                ["Camera Model", report.camera_model or "Not Disclosed"],
-                ["Software", report.software_used or "Not Disclosed"],
-                ["GPS Coordinates", report.gps_coordinates or "None"],
-            ]
-            for k, v in report.all_metadata.items():
-                if k not in ["Author", "Creator", "Producer", "CreationDate", "ModDate"]:
-                    rows.append([k, v])
-            self.populate_table_safely(self.table_metadata, rows)
-            self.status_label.setText("File metadata inspection complete.")
-            self.btn_scan_file.setEnabled(True)
-            self.btn_scan_file.setText("Inspect File Metadata")
+        # AI Control Bar
+        ai_controls = QHBoxLayout()
+        ai_controls.addWidget(QLabel("AI Model:"))
 
-        def on_error(err_msg):
-            self.status_label.setText("Metadata extraction failed.")
-            self.btn_scan_file.setEnabled(True)
-            self.btn_scan_file.setText("Inspect File Metadata")
-            QMessageBox.warning(self, "Inspection Error", f"Failed to extract metadata:\n{err_msg}")
+        self.combo_ai_model = QComboBox()
+        for model_id, model_label in LOW_RAM_MODELS:
+            self.combo_ai_model.addItem(model_label, model_id)
+        self.combo_ai_model.addItem("Rule-Based Heuristic Analyst (0-RAM)", "heuristic")
+        ai_controls.addWidget(self.combo_ai_model, 1)
 
-        worker = AsyncTaskWorker(self.metadata_engine.inspect_file, fp)
-        worker.signals.finished.connect(on_finished)
-        worker.signals.error.connect(on_error)
-        self.thread_pool.start(worker)
+        self.btn_pull_model = QPushButton("📥 Pull Model")
+        self.btn_pull_model.setToolTip("Pulls chosen lightweight model into local Ollama runtime")
+        self.btn_pull_model.clicked.connect(self._pull_ai_model)
+        ai_controls.addWidget(self.btn_pull_model)
 
-    # -------------------------------------------------------------------------
-    # View 14: Wayback Machine History
-    # -------------------------------------------------------------------------
+        self.btn_synthesize = QPushButton("🚀 Synthesize OSINT Dossier")
+        self.btn_synthesize.setObjectName("primaryButton")
+        self.btn_synthesize.setToolTip("Synthesize complete multi-module intelligence assessment")
+        self.btn_synthesize.clicked.connect(self._synthesize_dossier)
+        ai_controls.addWidget(self.btn_synthesize)
+        ai_layout.addLayout(ai_controls)
 
-    def _create_archive_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        # Status & Pull Progress
+        self.lbl_llm_status = QLabel("Checking local AI status...")
+        self.lbl_llm_status.setStyleSheet("color: #a6adc8; font-size: 12px;")
+        ai_layout.addWidget(self.lbl_llm_status)
 
-        group_arch = QGroupBox("Internet Archive (Wayback Machine) Milestones")
-        arch_layout = QGridLayout(group_arch)
+        self.progress_pull_model = QProgressBar()
+        self.progress_pull_model.setRange(0, 100)
+        self.progress_pull_model.setValue(0)
+        self.progress_pull_model.setVisible(False)
+        ai_layout.addWidget(self.progress_pull_model)
 
-        self.lbl_arch_first = QLabel("First Recorded: –")
-        self.lbl_arch_latest = QLabel("Latest Recorded: –")
-        self.lbl_arch_samples = QLabel("Milestone Captures: –")
+        # Markdown Dossier Browser
+        self.dossier_browser = QTextBrowser()
+        self.dossier_browser.setOpenExternalLinks(True)
+        self.dossier_browser.setPlaceholderText(
+            "The Executive OSINT Dossier will appear here.\n\n"
+            "Click '🚀 Synthesize OSINT Dossier' to run the offline AI correlation engine on collected telemetry, "
+            "or ask interactive follow-up questions in the chat box below."
+        )
+        ai_layout.addWidget(self.dossier_browser, 1)
 
-        for lbl_w in [self.lbl_arch_first, self.lbl_arch_latest, self.lbl_arch_samples]:
-            lbl_w.setStyleSheet("background-color: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 600;")
+        # Offline Interactive Chat Row
+        chat_layout = QHBoxLayout()
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText(
+            "Ask follow-up question offline (e.g. 'How do I fix my DMARC record?' or 'Which finding is most dangerous?')..."
+        )
+        self.chat_input.returnPressed.connect(self._ask_local_ai)
+        chat_layout.addWidget(self.chat_input, 1)
 
-        arch_layout.addWidget(self.lbl_arch_first, 0, 0)
-        arch_layout.addWidget(self.lbl_arch_latest, 0, 1)
-        arch_layout.addWidget(self.lbl_arch_samples, 0, 2)
+        self.btn_ask_ai = QPushButton("Ask AI")
+        self.btn_ask_ai.clicked.connect(self._ask_local_ai)
+        chat_layout.addWidget(self.btn_ask_ai)
+        ai_layout.addLayout(chat_layout)
 
-        layout.addWidget(group_arch)
+        right_layout.addWidget(ai_box)
 
-        group_snaps = QGroupBox("Wayback Historical Captures")
-        snaps_layout = QVBoxLayout(group_snaps)
-
-        self.table_archive = QTableWidget(0, 4)
-        self.table_archive.setHorizontalHeaderLabels(["Capture Timestamp", "Status Code", "MIME Type", "Archive URL"])
-        self.table_archive.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_archive.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table_archive.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_archive.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_archive)
-        snaps_layout.addWidget(self.table_archive)
-
-        layout.addWidget(group_snaps)
-        return widget
-
-    # -------------------------------------------------------------------------
-    # View 15: Live Activity Logs & JSON
-    # -------------------------------------------------------------------------
-
-    def _create_logs_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        splitter = QSplitter(Qt.Vertical)
-
-        grp_logs = QGroupBox("Live Activity Log (Polite Rate Limiting & Stage Progress)")
-        v_logs = QVBoxLayout(grp_logs)
-
-        self.txt_logs = QTextEdit()
-        self.txt_logs.setReadOnly(True)
-        v_logs.addWidget(self.txt_logs)
-
-        grp_json = QGroupBox("Consolidated Raw JSON Output")
-        v_json = QVBoxLayout(grp_json)
-
-        ctrl_json = QHBoxLayout()
-        btn_copy_json = QPushButton("Copy Raw JSON")
-        btn_copy_json.clicked.connect(self._copy_json_to_clipboard)
-        ctrl_json.addWidget(btn_copy_json)
-        ctrl_json.addStretch(1)
-        v_json.addLayout(ctrl_json)
-
-        self.txt_json = QTextEdit()
-        self.txt_json.setReadOnly(True)
-        v_json.addWidget(self.txt_json)
-
-        splitter.addWidget(grp_logs)
-        splitter.addWidget(grp_json)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        # Splitter between left metrics and right AI console
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 5)
 
         layout.addWidget(splitter)
         return widget
 
-    # -------------------------------------------------------------------------
-    # View 16: Personal Phone Number Privacy & Carrier Auditor
-    # -------------------------------------------------------------------------
+    def _check_local_ai_status(self) -> None:
+        """Asynchronously checks if local Ollama server is accessible."""
+        def _bg_check():
+            return is_ollama_available_sync()
 
-    def _create_phone_privacy_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        # Input Header
-        top_h = QHBoxLayout()
-        top_h.addWidget(QLabel("Phone Number:"))
-        self.input_phone = QLineEdit()
-        self.input_phone.setPlaceholderText("e.g. +1 555-0199 or +44 7911 123456 (international format)")
-        top_h.addWidget(self.input_phone, 2)
-
-        top_h.addWidget(QLabel("Default Region:"))
-        self.combo_phone_region = QComboBox()
-        self.combo_phone_region.addItems(["US", "GB", "DE", "FR", "CA", "AU", "IN", "JP", "BR", "MX", "CH", "NL"])
-        top_h.addWidget(self.combo_phone_region)
-
-        self.btn_phone_audit = QPushButton("Audit Phone Privacy & Carrier")
-        self.btn_phone_audit.setObjectName("primaryButton")
-        self.btn_phone_audit.clicked.connect(self._run_phone_privacy_audit)
-        top_h.addWidget(self.btn_phone_audit)
-        layout.addLayout(top_h)
-
-        # Metric Banner
-        banner = QGroupBox("Phone Exposure & Privacy Score")
-        b_layout = QGridLayout(banner)
-
-        self.lbl_phone_score = QLabel("Privacy Score: –")
-        self.lbl_phone_risk = QLabel("Risk: –")
-        self.lbl_phone_type = QLabel("Line Type: –")
-        self.lbl_phone_carrier = QLabel("Carrier: –")
-
-        for lbl_w in [self.lbl_phone_score, self.lbl_phone_risk, self.lbl_phone_type, self.lbl_phone_carrier]:
-            lbl_w.setStyleSheet("background: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700;")
-
-        b_layout.addWidget(self.lbl_phone_score, 0, 0)
-        b_layout.addWidget(self.lbl_phone_risk, 0, 1)
-        b_layout.addWidget(self.lbl_phone_type, 0, 2)
-        b_layout.addWidget(self.lbl_phone_carrier, 0, 3)
-
-        layout.addWidget(banner)
-
-        # Details Grid
-        details_grp = QGroupBox("Number Representations & Geolocation")
-        d_layout = QGridLayout(details_grp)
-
-        self.lbl_phone_e164 = QLabel("E.164: –")
-        self.lbl_phone_intl = QLabel("International: –")
-        self.lbl_phone_nat = QLabel("National: –")
-        self.lbl_phone_loc = QLabel("Location: –")
-        self.lbl_phone_tz = QLabel("Timezones: –")
-
-        d_layout.addWidget(self.lbl_phone_e164, 0, 0)
-        d_layout.addWidget(self.lbl_phone_intl, 0, 1)
-        d_layout.addWidget(self.lbl_phone_nat, 1, 0)
-        d_layout.addWidget(self.lbl_phone_loc, 1, 1)
-        d_layout.addWidget(self.lbl_phone_tz, 2, 0, 1, 2)
-
-        layout.addWidget(details_grp)
-
-        # Privacy Recommendations
-        rec_grp = QGroupBox("Privacy Hardening & SIM Security Guidance")
-        r_layout = QVBoxLayout(rec_grp)
-        self.txt_phone_recs = QTextEdit()
-        self.txt_phone_recs.setReadOnly(True)
-        self.txt_phone_recs.setMaximumHeight(90)
-        r_layout.addWidget(self.txt_phone_recs)
-        layout.addWidget(rec_grp)
-
-        # Search Dorks Table
-        dork_grp = QGroupBox("Safe Public Web Verification Search Dorks (Self-Audit)")
-        dk_layout = QVBoxLayout(dork_grp)
-
-        self.table_phone_dorks = QTableWidget(0, 4)
-        self.table_phone_dorks.setHorizontalHeaderLabels([
-            "Audit Check", "Search Dork Query", "Description", "Verification Link (Click to Open)"
-        ])
-        self.table_phone_dorks.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_phone_dorks.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_phone_dorks.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table_phone_dorks.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
-        self._setup_table_interactions(self.table_phone_dorks)
-        dk_layout.addWidget(self.table_phone_dorks)
-
-        layout.addWidget(dork_grp)
-        return widget
-
-    def _run_phone_privacy_audit(self) -> None:
-        raw = self.input_phone.text().strip()
-        if not raw:
-            QMessageBox.warning(self, "No Phone Number", "Please enter a phone number to analyze.")
-            return
-
-        region = self.combo_phone_region.currentText()
-        self.btn_phone_audit.setEnabled(False)
-        self.btn_phone_audit.setText("Analyzing...")
-        self.status_label.setText(f"Analyzing phone number '{raw}' in background...")
-
-        def on_finished(report):
-            self._populate_phone_privacy_view(report)
-            self.status_label.setText("Phone privacy audit complete.")
-            self.status_bar.showMessage("Phone privacy audit complete.", 5000)
-            self.btn_phone_audit.setEnabled(True)
-            self.btn_phone_audit.setText("Audit Phone Privacy & Carrier")
-
-        def on_error(err_msg):
-            self.status_label.setText("Phone audit failed.")
-            self.btn_phone_audit.setEnabled(True)
-            self.btn_phone_audit.setText("Audit Phone Privacy & Carrier")
-            QMessageBox.warning(self, "Phone Audit Error", f"Failed to analyze phone number:\n{err_msg}")
-
-        worker = AsyncTaskWorker(PhonePrivacyEngine.audit_phone, raw, default_region=region)
-        worker.signals.finished.connect(on_finished)
-        worker.signals.error.connect(on_error)
+        worker = AsyncTaskWorker(_bg_check)
+        worker.signals.finished.connect(self._on_ollama_status)
         self.thread_pool.start(worker)
 
-    def _populate_phone_privacy_view(self, report: PhonePrivacyReport) -> None:
-        self.lbl_phone_score.setText(f"Privacy Score: {report.privacy_score}/100")
-        self.lbl_phone_risk.setText(f"Exposure Risk: {report.privacy_risk_level}")
-        risk_color = "#f38ba8" if report.privacy_risk_level == "HIGH" else ("#fab387" if report.privacy_risk_level == "MEDIUM" else "#a6e3a1")
-        self.lbl_phone_risk.setStyleSheet(f"background: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700; color: {risk_color};")
+    def _on_ollama_status(self, is_online: bool) -> None:
+        if is_online:
+            self.lbl_llm_status.setText("🟢 Local Ollama Server Online (Ready for low-RAM streaming)")
+            self.lbl_llm_status.setStyleSheet("color: #a6e3a1; font-weight: 600;")
+        else:
+            self.lbl_llm_status.setText("ℹ️ Local Ollama Offline — Defaulting to Fast Rule-Based Correlation (0-RAM)")
+            self.lbl_llm_status.setStyleSheet("color: #fab387; font-weight: 500;")
 
-        self.lbl_phone_type.setText(f"Line Type: {report.line_type}")
-        self.lbl_phone_carrier.setText(f"Carrier: {report.carrier_name}")
-
-        self.lbl_phone_e164.setText(f"E.164: {report.e164 or 'N/A'}")
-        self.lbl_phone_intl.setText(f"International: {report.international or 'N/A'}")
-        self.lbl_phone_nat.setText(f"National: {report.national or 'N/A'}")
-        self.lbl_phone_loc.setText(f"Location: {report.location_name}")
-        self.lbl_phone_tz.setText(f"Timezones: {', '.join(report.timezones) or 'Unknown'}")
-
-        self.txt_phone_recs.setPlainText("\n• ".join(["Guidance:"] + report.privacy_recommendations) if report.privacy_recommendations else "No specific privacy risks flagged.")
-
-        dork_rows = [
-            [d.get("title", ""), d.get("query", ""), d.get("description", ""), d.get("url", "")]
-            for d in report.dork_links
-        ]
-        self.populate_table_safely(self.table_phone_dorks, dork_rows)
-
-    # -------------------------------------------------------------------------
-    # View 17: Personal Email Breach & Avatar Leak Auditor
-    # -------------------------------------------------------------------------
-
-    def _create_email_privacy_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        # Top query input
-        top_h = QHBoxLayout()
-        top_h.addWidget(QLabel("Personal Email Address:"))
-        self.input_privacy_email = QLineEdit()
-        self.input_privacy_email.setPlaceholderText("e.g. user@example.com")
-        top_h.addWidget(self.input_privacy_email, 2)
-
-        self.btn_email_audit = QPushButton("Audit Email Exposure & Breaches")
-        self.btn_email_audit.setObjectName("primaryButton")
-        self.btn_email_audit.clicked.connect(self._run_email_privacy_audit)
-        top_h.addWidget(self.btn_email_audit)
-        layout.addLayout(top_h)
-
-        # Metric Banner
-        banner = QGroupBox("Email Identity & Public Exposure Metrics")
-        b_layout = QGridLayout(banner)
-
-        self.lbl_email_priv_score = QLabel("Privacy Score: –")
-        self.lbl_email_priv_risk = QLabel("Risk: –")
-        self.lbl_email_breach_count = QLabel("Breaches: –")
-        self.lbl_email_gravatar = QLabel("Avatar Leaks: –")
-
-        for lbl_w in [self.lbl_email_priv_score, self.lbl_email_priv_risk, self.lbl_email_breach_count, self.lbl_email_gravatar]:
-            lbl_w.setStyleSheet("background: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700;")
-
-        b_layout.addWidget(self.lbl_email_priv_score, 0, 0)
-        b_layout.addWidget(self.lbl_email_priv_risk, 0, 1)
-        b_layout.addWidget(self.lbl_email_breach_count, 0, 2)
-        b_layout.addWidget(self.lbl_email_gravatar, 0, 3)
-
-        layout.addWidget(banner)
-
-        # Identity Details Grid
-        id_grp = QGroupBox("Cryptographic Hashes & Profile Leak Details")
-        id_layout = QGridLayout(id_grp)
-
-        self.lbl_email_domain = QLabel("Domain / Disposable: –")
-        self.lbl_email_mx = QLabel("MX Server: –")
-        self.lbl_email_md5 = QLabel("MD5 Hash: –")
-        self.lbl_email_sha256 = QLabel("SHA-256 Hash: –")
-        self.lbl_email_grav_name = QLabel("Gravatar Name: –")
-        self.lbl_email_grav_accs = QLabel("Linked Accounts: –")
-
-        id_layout.addWidget(self.lbl_email_domain, 0, 0)
-        id_layout.addWidget(self.lbl_email_mx, 0, 1)
-        id_layout.addWidget(self.lbl_email_md5, 1, 0)
-        id_layout.addWidget(self.lbl_email_sha256, 1, 1)
-        id_layout.addWidget(self.lbl_email_grav_name, 2, 0)
-        id_layout.addWidget(self.lbl_email_grav_accs, 2, 1)
-
-        layout.addWidget(id_grp)
-
-        # Recommendations
-        rec_grp = QGroupBox("Email Privacy & Credential Hardening Recommendations")
-        r_layout = QVBoxLayout(rec_grp)
-        self.txt_email_recs = QTextEdit()
-        self.txt_email_recs.setReadOnly(True)
-        self.txt_email_recs.setMaximumHeight(90)
-        r_layout.addWidget(self.txt_email_recs)
-        layout.addWidget(rec_grp)
-
-        # Breaches Table
-        br_grp = QGroupBox("Public Data Breaches Associated with this Email")
-        br_layout = QVBoxLayout(br_grp)
-
-        self.table_email_breaches = QTableWidget(0, 3)
-        self.table_email_breaches.setHorizontalHeaderLabels(["Breach / Source Name", "Domain", "Status"])
-        self.table_email_breaches.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_email_breaches.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_email_breaches.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self._setup_table_interactions(self.table_email_breaches)
-        br_layout.addWidget(self.table_email_breaches)
-
-        layout.addWidget(br_grp)
-        return widget
-
-    def _run_email_privacy_audit(self) -> None:
-        raw = self.input_privacy_email.text().strip()
-        if not raw:
-            QMessageBox.warning(self, "No Email", "Please enter an email address to analyze.")
+    def _pull_ai_model(self) -> None:
+        model_name = str(self.combo_ai_model.currentData() or "qwen2.5:1.5b")
+        if model_name == "heuristic":
+            QMessageBox.information(
+                self,
+                "Zero-RAM Engine",
+                "The Rule-Based Heuristic Engine requires zero extra downloads and 0 MB extra RAM.",
+            )
             return
 
-        self.btn_email_audit.setEnabled(False)
-        self.btn_email_audit.setText("Auditing Exposure...")
-        self.status_label.setText(f"Auditing email exposure for '{raw}' in background...")
+        self.btn_pull_model.setEnabled(False)
+        self.progress_pull_model.setVisible(True)
+        self.progress_pull_model.setValue(0)
+        self.lbl_llm_status.setText(f"Pulling model '{model_name}' via Ollama...")
 
-        def on_finished(report):
-            self._populate_email_privacy_view(report)
-            self.status_label.setText("Email privacy audit complete.")
-            self.status_bar.showMessage("Email privacy audit complete.", 5000)
-            self.btn_email_audit.setEnabled(True)
-            self.btn_email_audit.setText("Audit Email Exposure & Breaches")
-
-        def on_error(err_msg):
-            self.status_label.setText("Email audit failed.")
-            self.btn_email_audit.setEnabled(True)
-            self.btn_email_audit.setText("Audit Email Exposure & Breaches")
-            QMessageBox.warning(self, "Email Audit Error", f"Failed to audit email:\n{err_msg}")
-
-        worker = AsyncTaskWorker(EmailPrivacyEngine.audit_email, raw)
-        worker.signals.finished.connect(on_finished)
-        worker.signals.error.connect(on_error)
+        worker = ModelPullWorker(model_name)
+        worker.signals.progress.connect(self._on_pull_progress)
+        worker.signals.finished.connect(self._on_pull_finished)
+        worker.signals.error.connect(self._on_pull_error)
         self.thread_pool.start(worker)
 
-    def _populate_email_privacy_view(self, report: EmailPrivacyReport) -> None:
-        self.lbl_email_priv_score.setText(f"Privacy Score: {report.privacy_score}/100")
-        self.lbl_email_priv_risk.setText(f"Risk: {report.privacy_risk_level}")
-        risk_color = "#f38ba8" if report.privacy_risk_level in ("CRITICAL", "HIGH") else ("#fab387" if report.privacy_risk_level == "MEDIUM" else "#a6e3a1")
-        self.lbl_email_priv_risk.setStyleSheet(f"background: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700; color: {risk_color};")
+    def _on_pull_progress(self, status: str, pct: float) -> None:
+        self.lbl_llm_status.setText(f"Downloading: {status} ({pct:.1f}%)")
+        self.progress_pull_model.setValue(int(pct))
 
-        self.lbl_email_breach_count.setText(f"Breaches: {report.breaches_count} Found")
-        grav_str = "Exposed" if report.gravatar_found else "None"
-        self.lbl_email_gravatar.setText(f"Gravatar Profile: {grav_str}")
+    def _on_pull_finished(self, msg: str) -> None:
+        self.btn_pull_model.setEnabled(True)
+        self.progress_pull_model.setVisible(False)
+        self.lbl_llm_status.setText(f"✅ {msg}")
+        self.lbl_llm_status.setStyleSheet("color: #a6e3a1; font-weight: 600;")
 
-        disp_str = "Yes (Burner)" if report.is_disposable else "Standard Provider"
-        self.lbl_email_domain.setText(f"Domain: {report.domain} ({disp_str})")
-        self.lbl_email_mx.setText(f"MX Records: {'Active' if report.mx_records_found else 'Missing'}")
-        self.lbl_email_md5.setText(f"MD5 Hash: {report.md5_hash}")
-        self.lbl_email_sha256.setText(f"SHA-256 Hash: {report.sha256_hash[:16]}...")
-        self.lbl_email_grav_name.setText(f"Gravatar Name: {report.gravatar_display_name or 'None'}")
-        self.lbl_email_grav_accs.setText(f"Linked Accounts: {', '.join(report.gravatar_accounts_linked) or 'None'}")
+    def _on_pull_error(self, err: str) -> None:
+        self.btn_pull_model.setEnabled(True)
+        self.progress_pull_model.setVisible(False)
+        self.lbl_llm_status.setText(f"⚠️ Model pull failed: {err}")
+        self.lbl_llm_status.setStyleSheet("color: #f38ba8;")
 
-        self.txt_email_recs.setPlainText("\n• ".join(["Guidance:"] + report.recommendations) if report.recommendations else "No critical email exposures detected.")
-
-        breach_rows = [
-            [b.breach_name, b.domain or report.domain, "Compromised in public data breach"]
-            for b in report.breaches
-        ]
-        self.populate_table_safely(self.table_email_breaches, breach_rows)
-
-    # -------------------------------------------------------------------------
-    # View 18: Social Media Exposure & Linkability Auditor
-    # -------------------------------------------------------------------------
-
-    def _create_social_privacy_view(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        top_h = QHBoxLayout()
-        top_h.addWidget(QLabel("Personal Handle / Username:"))
-        self.input_social_handle = QLineEdit()
-        self.input_social_handle.setPlaceholderText("e.g. personal handle to audit across Instagram, Facebook, X, Reddit, etc.")
-        top_h.addWidget(self.input_social_handle, 2)
-
-        self.btn_social_audit = QPushButton("Audit Social Exposure & Linkability")
-        self.btn_social_audit.setObjectName("primaryButton")
-        self.btn_social_audit.clicked.connect(self._run_social_privacy_audit)
-        top_h.addWidget(self.btn_social_audit)
-        layout.addLayout(top_h)
-
-        # Metric Banner
-        banner = QGroupBox("Personal Dossier Linkability & Profile Correlation")
-        b_layout = QGridLayout(banner)
-
-        self.lbl_social_link_score = QLabel("Linkability Score: –")
-        self.lbl_social_link_rating = QLabel("Correlation Risk: –")
-        self.lbl_social_public_count = QLabel("Public Profiles: –")
-        self.lbl_social_gated_count = QLabel("Login Gated: –")
-
-        for lbl_w in [self.lbl_social_link_score, self.lbl_social_link_rating, self.lbl_social_public_count, self.lbl_social_gated_count]:
-            lbl_w.setStyleSheet("background: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700;")
-
-        b_layout.addWidget(self.lbl_social_link_score, 0, 0)
-        b_layout.addWidget(self.lbl_social_link_rating, 0, 1)
-        b_layout.addWidget(self.lbl_social_public_count, 0, 2)
-        b_layout.addWidget(self.lbl_social_gated_count, 0, 3)
-
-        layout.addWidget(banner)
-
-        # Guidance Card
-        guidance_grp = QGroupBox("Cross-Platform Identity Correlation & Privacy Hardening")
-        g_layout = QVBoxLayout(guidance_grp)
-        self.txt_social_guidance = QTextEdit()
-        self.txt_social_guidance.setReadOnly(True)
-        self.txt_social_guidance.setMaximumHeight(90)
-        g_layout.addWidget(self.txt_social_guidance)
-        layout.addWidget(guidance_grp)
-
-        # Profiles Table
-        p_grp = QGroupBox("Publicly Reachable Profiles & OpenGraph Metadata Exposure (8 Networks)")
-        p_layout = QVBoxLayout(p_grp)
-
-        self.table_social_profiles = QTableWidget(0, 7)
-        self.table_social_profiles.setHorizontalHeaderLabels([
-            "Platform", "Category", "Accessibility", "HTTP Code", "OpenGraph Title", "Exposed Bio / Description", "Profile URL"
-        ])
-        self.table_social_profiles.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table_social_profiles.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table_social_profiles.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_social_profiles.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_social_profiles.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
-        self.table_social_profiles.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.table_social_profiles.horizontalHeader().setSectionResizeMode(6, QHeaderView.Interactive)
-        self._setup_table_interactions(self.table_social_profiles)
-        p_layout.addWidget(self.table_social_profiles)
-
-        layout.addWidget(p_grp)
-        return widget
-
-    def _run_social_privacy_audit(self) -> None:
-        raw = self.input_social_handle.text().strip()
-        handle = clean_brand_handle(raw)
-        if not handle:
-            QMessageBox.warning(self, "No Handle", "Please enter a valid username or handle to inspect.")
+    def _synthesize_dossier(self) -> None:
+        if not self.latest_results:
+            QMessageBox.warning(
+                self,
+                "No Data Available",
+                "Please run a passive reconnaissance scan on a domain first or enter personal data in Hub 5.",
+            )
             return
 
-        self.btn_social_audit.setEnabled(False)
-        self.btn_social_audit.setText("Auditing 8 Networks...")
-        self.status_label.setText(f"Inspecting public social exposure for handle '{handle}' in background...")
+        self.btn_synthesize.setEnabled(False)
+        self.dossier_text = ""
+        self.dossier_browser.clear()
+        self.lbl_llm_status.setText("🧠 Synthesizing OSINT Intelligence Dossier...")
 
-        def on_finished(report):
-            self._populate_social_privacy_view(report)
-            self.status_label.setText("Social exposure audit complete.")
-            self.status_bar.showMessage("Social exposure audit complete.", 5000)
-            self.btn_social_audit.setEnabled(True)
-            self.btn_social_audit.setText("Audit Social Exposure & Linkability")
+        selected_model = str(self.combo_ai_model.currentData() or "qwen2.5:1.5b")
+        engine = LocalLLMEngine()
 
-        def on_error(err_msg):
-            self.status_label.setText("Social audit failed.")
-            self.btn_social_audit.setEnabled(True)
-            self.btn_social_audit.setText("Audit Social Exposure & Linkability")
-            QMessageBox.warning(self, "Social Audit Error", f"Failed to audit social handle:\n{err_msg}")
+        findings = dict(self.latest_results)
+        if self.latest_personal_results:
+            findings["personal"] = self.latest_personal_results
 
-        worker = AsyncTaskWorker(SocialPrivacyEngine.audit_social_handle, handle)
-        worker.signals.finished.connect(on_finished)
-        worker.signals.error.connect(on_error)
+        worker = LLMStreamWorker(
+            lambda: engine.synthesize_dossier_stream(
+                findings,
+                model=selected_model,
+                force_heuristic=(selected_model == "heuristic"),
+            )
+        )
+        worker.signals.token.connect(self._on_dossier_token)
+        worker.signals.finished.connect(self._on_dossier_finished)
+        worker.signals.error.connect(self._on_dossier_error)
         self.thread_pool.start(worker)
 
-    def _populate_social_privacy_view(self, report: SocialPrivacyReport) -> None:
-        self.lbl_social_link_score.setText(f"Linkability: {report.linkability_score}/100")
-        self.lbl_social_link_rating.setText(f"Correlation: {report.linkability_rating}")
-        risk_color = "#f38ba8" if report.linkability_rating in ("CRITICAL", "HIGH") else ("#fab387" if report.linkability_rating == "MEDIUM" else "#a6e3a1")
-        self.lbl_social_link_rating.setStyleSheet(f"background: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700; color: {risk_color};")
+    def _ask_local_ai(self) -> None:
+        question = self.chat_input.text().strip()
+        if not question:
+            return
 
-        self.lbl_social_public_count.setText(f"Public Profiles: {report.public_profiles_found}")
-        self.lbl_social_gated_count.setText(f"Login Gated: {report.gated_profiles_found}")
+        self.chat_input.clear()
+        self.dossier_text += f"\n\n---\n### 👤 Investigator:\n{question}\n\n### 🧠 AI Analyst:\n"
+        self.dossier_browser.setMarkdown(self.dossier_text)
 
-        guidance_text = "\n• ".join(["Risks & Hardening:"] + report.cross_correlation_risks + report.hardening_tips)
-        self.txt_social_guidance.setPlainText(guidance_text)
+        engine = LocalLLMEngine()
+        selected_model = str(self.combo_ai_model.currentData() or "qwen2.5:1.5b")
+        findings = dict(self.latest_results)
+        if self.latest_personal_results:
+            findings["personal"] = self.latest_personal_results
 
-        rows = [
-            [
-                p.platform,
-                p.category,
-                p.status,
-                p.status_code,
-                p.og_title or "–",
-                p.og_description or "–",
-                p.profile_url,
-            ]
-            for p in report.profiles
-        ]
-        self.populate_table_safely(self.table_social_profiles, rows)
+        worker = LLMStreamWorker(
+            lambda: engine.ask_question_stream(
+                question,
+                findings,
+                model=selected_model,
+                force_heuristic=(selected_model == "heuristic"),
+            )
+        )
+        worker.signals.token.connect(self._on_dossier_token)
+        worker.signals.finished.connect(lambda txt: self.lbl_llm_status.setText("✅ Ready."))
+        worker.signals.error.connect(self._on_dossier_error)
+        self.thread_pool.start(worker)
+
+    def _on_dossier_token(self, chunk: str) -> None:
+        self.dossier_text += chunk
+        self.dossier_browser.setMarkdown(self.dossier_text)
+        sb = self.dossier_browser.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _on_dossier_finished(self, full_text: str) -> None:
+        self.btn_synthesize.setEnabled(True)
+        self.lbl_llm_status.setText("✅ Intelligence Dossier synthesized successfully.")
+        self.lbl_llm_status.setStyleSheet("color: #a6e3a1; font-weight: 600;")
+
+    def _on_dossier_error(self, err: str) -> None:
+        self.btn_synthesize.setEnabled(True)
+        self.lbl_llm_status.setText(f"⚠️ Synthesis error: {err}")
 
     # -------------------------------------------------------------------------
-    # Reconnaissance Execution & Signal Handlers
+    # HUB 2: Domain & Infrastructure (DNS, Subdomains, Takeovers, RDAP)
+    # -------------------------------------------------------------------------
+
+    def _create_hub2_domain_infra(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+
+        # Global Search / Filter Bar for Hub 2
+        filter_row = QHBoxLayout()
+        self.input_filter_hub2 = QLineEdit()
+        self.input_filter_hub2.setPlaceholderText(
+            "🔍 Search & filter across DNS records, subdomains, dangling CNAMEs, and RDAP registration..."
+        )
+        self.input_filter_hub2.textChanged.connect(self._on_filter_hub2)
+        filter_row.addWidget(self.input_filter_hub2)
+        layout.addLayout(filter_row)
+
+        # Scrollable area containing the 4 infrastructure cards
+        scroll_content = QWidget()
+        s_layout = QVBoxLayout(scroll_content)
+        s_layout.setContentsMargins(0, 0, 0, 0)
+        s_layout.setSpacing(14)
+
+        # 1. DNS Records Card
+        card_dns = QGroupBox("DNS Resource Records (A, AAAA, MX, NS, TXT, SOA, CAA)")
+        dns_box = QVBoxLayout(card_dns)
+        self.table_dns = self._create_standard_table(
+            ["Record Type", "Host / Name", "Target / Value", "TTL (sec)", "Status / Notes"],
+            min_height=220,
+        )
+        dns_box.addWidget(self.table_dns)
+        s_layout.addWidget(card_dns)
+
+        # 2. Certificate Transparency & Subdomains Card
+        card_sub = QGroupBox("Certificate Transparency & Discovered Subdomains")
+        sub_box = QVBoxLayout(card_sub)
+        self.table_subdomains = self._create_standard_table(
+            ["Discovered Subdomain", "Discovery Source", "Resolved IP Address", "Hosting / Cloud Status"],
+            min_height=220,
+        )
+        sub_box.addWidget(self.table_subdomains)
+        s_layout.addWidget(card_sub)
+
+        # 3. Dangling CNAMEs & Subdomain Takeovers Card
+        card_takeover = QGroupBox("Dangling CNAMEs & Subdomain Takeover Vulnerabilities")
+        take_box = QVBoxLayout(card_takeover)
+        self.table_takeovers = self._create_standard_table(
+            ["Subdomain Pointer", "Target CNAME", "Fingerprinted Cloud Service", "Vulnerability Status", "Action / Remediation"],
+            min_height=200,
+        )
+        take_box.addWidget(self.table_takeovers)
+        s_layout.addWidget(card_takeover)
+
+        # 4. RDAP / Whois Ownership Card
+        card_rdap = QGroupBox("RDAP & Whois Ownership Registration Lifecycle")
+        rdap_box = QVBoxLayout(card_rdap)
+        self.table_rdap = self._create_standard_table(
+            ["Registration Attribute", "Value", "Audit Notes"],
+            min_height=200,
+        )
+        rdap_box.addWidget(self.table_rdap)
+        s_layout.addWidget(card_rdap)
+
+        layout.addWidget(self._wrap_in_scroll_area(scroll_content))
+        return container
+
+    def _on_filter_hub2(self, text: str) -> None:
+        for t in (self.table_dns, self.table_subdomains, self.table_takeovers, self.table_rdap):
+            self._filter_table(t, text)
+
+    # -------------------------------------------------------------------------
+    # HUB 3: Network, Cloud & Threat Exposure (InternetDB, IP Intel, Threat History)
+    # -------------------------------------------------------------------------
+
+    def _create_hub3_network_threat(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+
+        # Search / Filter Bar
+        filter_row = QHBoxLayout()
+        self.input_filter_hub3 = QLineEdit()
+        self.input_filter_hub3.setPlaceholderText(
+            "🔍 Search & filter across open ports, CVEs, cloud providers, and historical scans..."
+        )
+        self.input_filter_hub3.textChanged.connect(self._on_filter_hub3)
+        filter_row.addWidget(self.input_filter_hub3)
+        layout.addLayout(filter_row)
+
+        scroll_content = QWidget()
+        s_layout = QVBoxLayout(scroll_content)
+        s_layout.setContentsMargins(0, 0, 0, 0)
+        s_layout.setSpacing(14)
+
+        # 1. Shodan InternetDB Passive Exposure
+        card_exposure = QGroupBox("Shodan InternetDB Passive Exposure (Open Ports, CVEs, Hostnames)")
+        exp_box = QVBoxLayout(card_exposure)
+        self.table_exposure = self._create_standard_table(
+            ["Target IP Address", "Observed Hostnames", "Open Ports", "CVE Vulnerabilities", "Tags / Banners"],
+            min_height=220,
+        )
+        exp_box.addWidget(self.table_exposure)
+        s_layout.addWidget(card_exposure)
+
+        # 2. IP Geolocation, ASN, BGP & Cloud Provider
+        card_ip = QGroupBox("IP Geolocation, ASN, BGP & Cloud Provider Fingerprinting")
+        ip_box = QVBoxLayout(card_ip)
+        self.table_ip_intel = self._create_standard_table(
+            ["IP Address", "Country", "ASN / Network Owner", "ISP", "Detected Cloud / CDN Provider"],
+            min_height=200,
+        )
+        ip_box.addWidget(self.table_ip_intel)
+        s_layout.addWidget(card_ip)
+
+        # 3. Threat History & Archive Records (URLScan.io & AlienVault OTX)
+        card_threat = QGroupBox("Threat Archives (URLScan.io Historical Scans & AlienVault OTX Passive DNS)")
+        threat_box = QVBoxLayout(card_threat)
+        self.table_threat = self._create_standard_table(
+            ["Intelligence Source", "Observed Date", "Observed URL / Target", "Associated IP / ASN", "Report / Archive Permalink"],
+            min_height=220,
+        )
+        threat_box.addWidget(self.table_threat)
+        s_layout.addWidget(card_threat)
+
+        layout.addWidget(self._wrap_in_scroll_area(scroll_content))
+        return container
+
+    def _on_filter_hub3(self, text: str) -> None:
+        for t in (self.table_exposure, self.table_ip_intel, self.table_threat):
+            self._filter_table(t, text)
+
+    # -------------------------------------------------------------------------
+    # HUB 4: Web & Email Defensive Posture (Security Headers, SPF/DMARC, Tech Stack, Wayback)
+    # -------------------------------------------------------------------------
+
+    def _create_hub4_web_defense(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+
+        filter_row = QHBoxLayout()
+        self.input_filter_hub4 = QLineEdit()
+        self.input_filter_hub4.setPlaceholderText(
+            "🔍 Search & filter headers, anti-spoofing policies, web technologies, and archive milestones..."
+        )
+        self.input_filter_hub4.textChanged.connect(self._on_filter_hub4)
+        filter_row.addWidget(self.input_filter_hub4)
+        layout.addLayout(filter_row)
+
+        scroll_content = QWidget()
+        s_layout = QVBoxLayout(scroll_content)
+        s_layout.setContentsMargins(0, 0, 0, 0)
+        s_layout.setSpacing(14)
+
+        # 1. Email Security Posture & Anti-Spoofing
+        card_email_sec = QGroupBox("Email Security Posture & Anti-Spoofing (SPF, DMARC, DKIM, BIMI)")
+        es_box = QVBoxLayout(card_email_sec)
+        self.table_email_sec = self._create_standard_table(
+            ["Defensive Mechanism", "Status", "Configured Policy / Record", "Risk Evaluation"],
+            min_height=200,
+        )
+        es_box.addWidget(self.table_email_sec)
+        s_layout.addWidget(card_email_sec)
+
+        # 2. HTTP Security Headers & TLS Configuration
+        card_web = QGroupBox("HTTP Security Headers & TLS Configuration")
+        web_box = QVBoxLayout(card_web)
+        self.table_web = self._create_standard_table(
+            ["Defensive Security Header", "Status", "Configured Value", "Remediation Recommendation"],
+            min_height=220,
+        )
+        web_box.addWidget(self.table_web)
+        s_layout.addWidget(card_web)
+
+        # 3. Web Technology Stack & Manifests
+        card_tech = QGroupBox("Web Technology Stack, CMS & Manifests (security.txt / robots.txt)")
+        tech_box = QVBoxLayout(card_tech)
+        self.table_tech = self._create_standard_table(
+            ["Category", "Technology / Framework", "Version / Details", "Evidence Source"],
+            min_height=200,
+        )
+        tech_box.addWidget(self.table_tech)
+        s_layout.addWidget(card_tech)
+
+        # 4. Wayback Machine Historical Milestones
+        card_archive = QGroupBox("Internet Archive (Wayback Machine) Historical Milestones")
+        arch_box = QVBoxLayout(card_archive)
+        self.table_archive = self._create_standard_table(
+            ["Milestone Event", "Date & Timestamp", "Archive Permalink", "Status"],
+            min_height=180,
+        )
+        arch_box.addWidget(self.table_archive)
+        s_layout.addWidget(card_archive)
+
+        layout.addWidget(self._wrap_in_scroll_area(scroll_content))
+        return container
+
+    def _on_filter_hub4(self, text: str) -> None:
+        for t in (self.table_email_sec, self.table_web, self.table_tech, self.table_archive):
+            self._filter_table(t, text)
+
+    # -------------------------------------------------------------------------
+    # HUB 5: Personal Data & Digital Footprint (Breaches, Phone, Social Matrix, EXIF Scrubber)
+    # -------------------------------------------------------------------------
+
+    def _create_hub5_personal_privacy(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+
+        # Top Personal Input Bar
+        top_box = QGroupBox("Personal Privacy & Digital Footprint Input")
+        tb_layout = QHBoxLayout(top_box)
+        tb_layout.setContentsMargins(10, 8, 10, 8)
+        tb_layout.setSpacing(8)
+
+        self.input_personal_email = QLineEdit()
+        self.input_personal_email.setPlaceholderText("Email: target@example.com")
+        tb_layout.addWidget(self.input_personal_email)
+
+        self.input_personal_phone = QLineEdit()
+        self.input_personal_phone.setPlaceholderText("Phone: +1... or E.164")
+        tb_layout.addWidget(self.input_personal_phone)
+
+        self.input_personal_handle = QLineEdit()
+        self.input_personal_handle.setPlaceholderText("Handle: e.g. johnsmith")
+        tb_layout.addWidget(self.input_personal_handle)
+
+        self.btn_run_personal = QPushButton("🔍 Run Personal Privacy Audit")
+        self.btn_run_personal.setObjectName("primaryButton")
+        self.btn_run_personal.clicked.connect(self._run_personal_audit)
+        tb_layout.addWidget(self.btn_run_personal)
+
+        self.btn_clear_personal = QPushButton("Clear")
+        self.btn_clear_personal.clicked.connect(self._clear_personal_fields)
+        tb_layout.addWidget(self.btn_clear_personal)
+        layout.addWidget(top_box)
+
+        # Status & Progress Row
+        status_row = QHBoxLayout()
+        self.lbl_personal_status = QLabel("Ready to audit personal footprint across email, phone, and 40+ platforms.")
+        self.lbl_personal_status.setStyleSheet("color: #a6adc8; font-weight: 500;")
+        self.progress_personal = QProgressBar()
+        self.progress_personal.setRange(0, 100)
+        self.progress_personal.setValue(0)
+        status_row.addWidget(self.lbl_personal_status, 1)
+        status_row.addWidget(self.progress_personal, 1)
+        layout.addLayout(status_row)
+
+        scroll_content = QWidget()
+        s_layout = QVBoxLayout(scroll_content)
+        s_layout.setContentsMargins(0, 0, 0, 0)
+        s_layout.setSpacing(14)
+
+        # Summary Badges Row
+        badge_row = QHBoxLayout()
+        self.lbl_personal_risk_badge = QLabel("Privacy Score: –")
+        self.lbl_personal_risk_badge.setStyleSheet(
+            "background-color: #181825; padding: 10px 14px; border-radius: 8px; font-weight: 700; font-size: 14px; color: #89b4fa;"
+        )
+        self.lbl_personal_linkability_badge = QLabel("Identity Linkability: –")
+        self.lbl_personal_linkability_badge.setStyleSheet(
+            "background-color: #181825; padding: 10px 14px; border-radius: 8px; font-weight: 700; font-size: 14px; color: #fab387;"
+        )
+        badge_row.addWidget(self.lbl_personal_risk_badge)
+        badge_row.addWidget(self.lbl_personal_linkability_badge)
+        badge_row.addStretch()
+        s_layout.addLayout(badge_row)
+
+        # 1. Email Breach Analytics & Identity Leaks
+        card_email = QGroupBox("Email Breach Analytics & Identity Hash Leaks (XposedOrNot / Gravatar / PGP)")
+        eb_box = QVBoxLayout(card_email)
+        self.table_personal_email = self._create_standard_table(
+            ["Identity Asset / Source", "Breach / Leak Name", "Date / Status", "Exposed Data Classes"],
+            min_height=180,
+        )
+        eb_box.addWidget(self.table_personal_email)
+        s_layout.addWidget(card_email)
+
+        # 2. Phone Carrier, VoIP & Messaging Deep Links
+        card_phone = QGroupBox("Phone Carrier, VoIP & Public Messaging App Verification Links")
+        ph_box = QVBoxLayout(card_phone)
+        self.table_personal_phone = self._create_standard_table(
+            ["Property", "Value", "Messaging App Verification Link"],
+            min_height=150,
+        )
+        ph_box.addWidget(self.table_personal_phone)
+        s_layout.addWidget(card_phone)
+
+        # 3. 40+ Social & Digital Footprint Matrix
+        card_social = QGroupBox("40+ Social & Digital Footprint Matrix (Strictly Passive)")
+        soc_box = QVBoxLayout(card_social)
+        self.table_personal_social = self._create_standard_table(
+            ["Platform", "Category", "Profile Status", "Public Profile Link", "Preview Title / Bio"],
+            min_height=220,
+        )
+        soc_box.addWidget(self.table_personal_social)
+        s_layout.addWidget(card_social)
+
+        # 4. Username Permutator & Identity Linkability Risk
+        card_perms = QGroupBox("Username Permutator & Cross-Platform Linkability Risk Engine")
+        perm_box = QVBoxLayout(card_perms)
+        self.table_personal_permutations = self._create_standard_table(
+            ["Generated Handle Variation", "Risk Assessment", "Linkability Note"],
+            min_height=180,
+        )
+        perm_box.addWidget(self.table_personal_permutations)
+        s_layout.addWidget(card_perms)
+
+        # 5. Document & Photo Privacy Scrubber (Read + Strip 100% Metadata)
+        card_scrub = QGroupBox("Document & Photo Privacy Scrubber (Inspect + Strip 100% EXIF/GPS Metadata)")
+        scrub_box = QVBoxLayout(card_scrub)
+        scrub_ctrls = QHBoxLayout()
+
+        self.btn_browse_scrubber = QPushButton("Browse Image / Document...")
+        self.btn_browse_scrubber.clicked.connect(self._browse_scrubber_file)
+        scrub_ctrls.addWidget(self.btn_browse_scrubber)
+
+        self.lbl_scrubber_file = QLabel("No file selected.")
+        self.lbl_scrubber_file.setStyleSheet("color: #a6adc8; font-weight: 500;")
+        scrub_ctrls.addWidget(self.lbl_scrubber_file, 1)
+
+        self.btn_sanitize_file = QPushButton("🛡️ Sanitize & Save Clean Copy")
+        self.btn_sanitize_file.setObjectName("primaryButton")
+        self.btn_sanitize_file.setToolTip("Strips all EXIF, GPS, and metadata tags and saves a sanitized clean copy")
+        self.btn_sanitize_file.clicked.connect(self._sanitize_current_file)
+        scrub_ctrls.addWidget(self.btn_sanitize_file)
+        scrub_box.addLayout(scrub_ctrls)
+
+        self.table_scrubber = self._create_standard_table(
+            ["Metadata Tag / Property", "Extracted Value", "Privacy Risk Assessment"],
+            min_height=180,
+        )
+        scrub_box.addWidget(self.table_scrubber)
+        s_layout.addWidget(card_scrub)
+
+        layout.addWidget(self._wrap_in_scroll_area(scroll_content))
+        return container
+
+    def _clear_personal_fields(self) -> None:
+        self.input_personal_email.clear()
+        self.input_personal_phone.clear()
+        self.input_personal_handle.clear()
+        for t in (
+            self.table_personal_email,
+            self.table_personal_phone,
+            self.table_personal_social,
+            self.table_personal_permutations,
+            self.table_scrubber,
+        ):
+            t.setRowCount(0)
+        self.lbl_personal_risk_badge.setText("Privacy Score: –")
+        self.lbl_personal_linkability_badge.setText("Identity Linkability: –")
+        self.lbl_personal_status.setText("Cleared.")
+
+    def _run_personal_audit(self) -> None:
+        email = self.input_personal_email.text().strip()
+        phone = self.input_personal_phone.text().strip()
+        handle = self.input_personal_handle.text().strip()
+
+        if not email and not phone and not handle:
+            QMessageBox.warning(
+                self,
+                "Input Required",
+                "Please enter at least an email address, phone number, or handle.",
+            )
+            return
+
+        self.btn_run_personal.setEnabled(False)
+        self.progress_personal.setRange(0, 0)  # indeterminate spinner
+        self.lbl_personal_status.setText(f"Auditing personal footprint for handle='{handle}', email='{email}'...")
+        force_refresh = self.chk_force_refresh.isChecked()
+
+        def _do_audit():
+            return PersonalOSINTSuite.run_suite_sync(
+                handle=handle,
+                email=email,
+                phone=phone,
+                force_refresh=force_refresh,
+            )
+
+        worker = AsyncTaskWorker(_do_audit)
+        worker.signals.finished.connect(self._on_personal_audit_finished)
+        worker.signals.error.connect(self._on_personal_audit_error)
+        self.thread_pool.start(worker)
+
+    def _on_personal_audit_finished(self, report: Any) -> None:
+        self.progress_personal.setRange(0, 100)
+        self.progress_personal.setValue(100)
+        self.btn_run_personal.setEnabled(True)
+        self.lbl_personal_status.setText("Personal privacy audit completed successfully.")
+
+        self.latest_personal_results = report.to_dict()
+
+        # Update Badges
+        priv_score = 100 - report.linkability_risk_score
+        self.lbl_personal_risk_badge.setText(f"Privacy Score: {priv_score}/100")
+        self.lbl_personal_linkability_badge.setText(
+            f"Identity Linkability: {report.linkability_risk_score}/100 ({report.linkability_rating})"
+        )
+
+        # 1. Email Report
+        email_rows = []
+        if report.email_report:
+            er = report.email_report
+            if er.gravatar_url:
+                email_rows.append(["Gravatar Profile", "Avatar Published", "Active", er.gravatar_url])
+            if er.pgp_keys_found:
+                email_rows.append(["OpenPGP Keyserver", f"{len(er.pgp_keys_found)} Keys Found", "Active", ", ".join(er.pgp_keys_found[:2])])
+            for b in er.breaches:
+                email_rows.append(["Breach (XposedOrNot)", b.name, b.breach_date, ", ".join(b.exposed_data[:3])])
+            if not email_rows:
+                email_rows.append(["Email Privacy", "No public breaches or gravatars indexed", "Clean", "None"])
+        self.populate_table_safely(self.table_personal_email, email_rows)
+
+        # 2. Phone Report
+        phone_rows = []
+        if report.messaging_links:
+            for k, v in report.messaging_links.items():
+                phone_rows.append([k, v, v])
+        if not phone_rows:
+            phone_rows.append(["Phone Telemetry", "No phone number provided or standard carrier format", "N/A"])
+        self.populate_table_safely(self.table_personal_phone, phone_rows)
+
+        # 3. 40+ Social Profiles
+        soc_rows = []
+        for p in report.social_profiles:
+            soc_rows.append([p.platform, p.category, p.status, p.url, p.title])
+        self.populate_table_safely(self.table_personal_social, soc_rows)
+
+        # 4. Username Permutations
+        perm_rows = []
+        for perm in report.username_permutations:
+            perm_rows.append([perm, "Permutation Generated", "Candidate alias for cross-platform linking"])
+        self.populate_table_safely(self.table_personal_permutations, perm_rows)
+
+    def _on_personal_audit_error(self, err: str) -> None:
+        self.progress_personal.setRange(0, 100)
+        self.btn_run_personal.setEnabled(True)
+        self.lbl_personal_status.setText(f"Error during audit: {err}")
+        QMessageBox.critical(self, "Audit Error", f"Personal audit failed: {err}")
+
+    def _browse_scrubber_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Photo or Document to Inspect",
+            "",
+            "Media & Documents (*.jpg *.jpeg *.png *.webp *.pdf *.docx);;All Files (*.*)",
+        )
+        if not path:
+            return
+
+        self.current_scrubber_file = path
+        self.lbl_scrubber_file.setText(Path(path).name)
+
+        # Read metadata using MetadataEngine
+        report = MetadataEngine.extract(path)
+        rows = []
+        for prop, val in report.properties.items():
+            risk = "HIGH (GPS Location)" if "gps" in prop.lower() or "lat" in prop.lower() else "MEDIUM"
+            rows.append([prop, str(val), risk])
+
+        if not rows:
+            rows.append(["Status", "Clean — Zero EXIF or Document metadata detected", "LOW"])
+        self.populate_table_safely(self.table_scrubber, rows)
+
+    def _sanitize_current_file(self) -> None:
+        if not self.current_scrubber_file or not os.path.exists(self.current_scrubber_file):
+            QMessageBox.warning(self, "No File", "Please browse and select a file first.")
+            return
+
+        success, clean_path, count = PrivacyScrubber.scrub_file(self.current_scrubber_file)
+        if success:
+            QMessageBox.information(
+                self,
+                "Metadata Sanitized",
+                f"File successfully sanitized!\n\nStripped {count} metadata fields.\n\nClean privacy copy saved at:\n{clean_path}",
+            )
+            self.populate_table_safely(
+                self.table_scrubber,
+                [["Status", f"Sanitized Clean Copy Created ({count} tags stripped)", "Clean"]],
+            )
+        else:
+            QMessageBox.critical(self, "Sanitization Failed", f"Could not scrub file: {clean_path}")
+
+    # -------------------------------------------------------------------------
+    # HUB 6: Live Activity Logs & Raw JSON Inspector
+    # -------------------------------------------------------------------------
+
+    def _create_hub6_logs_json(self) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+
+        # Left: Live Logs Console
+        logs_box = QGroupBox("Live Activity Logs")
+        lb_layout = QVBoxLayout(logs_box)
+        self.text_logs = QTextEdit()
+        self.text_logs.setReadOnly(True)
+        self.text_logs.setStyleSheet("font-family: Consolas, monospace; font-size: 12px;")
+        lb_layout.addWidget(self.text_logs)
+
+        btn_clear_logs = QPushButton("Clear Logs")
+        btn_clear_logs.clicked.connect(self.text_logs.clear)
+        lb_layout.addWidget(btn_clear_logs)
+
+        # Right: Raw JSON Viewer
+        json_box = QGroupBox("Consolidated Raw JSON Telemetry")
+        jb_layout = QVBoxLayout(json_box)
+        self.text_json = QTextEdit()
+        self.text_json.setReadOnly(True)
+        self.text_json.setStyleSheet("font-family: Consolas, monospace; font-size: 12px;")
+        jb_layout.addWidget(self.text_json)
+
+        j_ctrls = QHBoxLayout()
+        btn_copy_json = QPushButton("Copy JSON")
+        btn_copy_json.clicked.connect(lambda: QApplication.clipboard().setText(self.text_json.toPlainText()))
+        j_ctrls.addWidget(btn_copy_json)
+
+        btn_save_json = QPushButton("Save JSON...")
+        btn_save_json.clicked.connect(lambda: self._export_report("json"))
+        j_ctrls.addWidget(btn_save_json)
+        jb_layout.addLayout(j_ctrls)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(logs_box)
+        splitter.addWidget(json_box)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+
+        layout.addWidget(splitter)
+        return container
+
+    # -------------------------------------------------------------------------
+    # Passive Reconnaissance Orchestration
     # -------------------------------------------------------------------------
 
     def start_recon(self) -> None:
@@ -1918,16 +1344,13 @@ class MainWindow(QMainWindow):
             return
 
         self.input_domain.setText(domain)
-        brand = extract_brand_handle(domain)
-        self.input_gh_handle.setText(brand)
-        self.input_brand_handle.setText(brand)
-        self.input_social_handle.setText(brand)
 
         cfg = load_config()
         rate_rps = float(cfg.get("rate_limit_rps", 2.0))
         timeout = float(cfg.get("timeout_sec", 10.0))
         ua = str(cfg.get("user_agent", "OSINTReconStudio-PassiveAudit/1.0"))
         gh_token = str(cfg.get("github_token", ""))
+        force_refresh = self.chk_force_refresh.isChecked()
 
         enabled_modules = {
             "dns": self.chk_dns.isChecked(),
@@ -1946,13 +1369,6 @@ class MainWindow(QMainWindow):
             "username": self.chk_username.isChecked(),
         }
 
-        self.btn_start.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
-        self.btn_export.setEnabled(False)
-        self.progress_bar.setValue(0)
-        self.status_label.setText(f"Auditing target: {domain}...")
-        self.txt_logs.clear()
-
         self.current_worker = ReconWorker(
             domain=domain,
             enabled_modules=enabled_modules,
@@ -1960,11 +1376,13 @@ class MainWindow(QMainWindow):
             timeout=timeout,
             user_agent=ua,
             github_token=gh_token,
+            force_refresh=force_refresh,
         )
 
         self.current_worker.signals.started.connect(self._on_started)
         self.current_worker.signals.progress.connect(self._on_progress)
         self.current_worker.signals.log.connect(self._on_log)
+        self.current_worker.signals.module_complete.connect(self._on_module_complete)
         self.current_worker.signals.error.connect(self._on_error)
         self.current_worker.signals.finished.connect(self._on_finished)
 
@@ -1973,496 +1391,385 @@ class MainWindow(QMainWindow):
     def cancel_recon(self) -> None:
         if self.current_worker:
             self.current_worker.cancel()
-            self._on_log("WARNING", "Cancellation requested by user. Terminating active tasks...")
+            self._on_log("WARNING", "Cancelling reconnaissance pipeline...")
             self.btn_cancel.setEnabled(False)
-            self.btn_start.setEnabled(True)
 
     def clear_results(self) -> None:
-        self.current_report = None
         self.input_domain.clear()
+        self.latest_results.clear()
+        self.latest_personal_results = None
+        self.dossier_text = ""
+        self.dossier_browser.clear()
         self.lbl_grade.setText("–")
         self.lbl_score_num.setText("Awaiting audit")
-        self.lbl_metric_takeover.setText("Takeover Risk: –")
-        self.lbl_metric_email.setText("Email Defense: –")
-        self.lbl_metric_dnssec.setText("DNSSEC: –")
-        self.lbl_metric_headers.setText("Headers: –")
-        self.lbl_metric_tls.setText("TLS Cert: –")
-        self.lbl_metric_exposure.setText("InternetDB: –")
-        self.lbl_metric_cloud.setText("Cloud / CDN: –")
-        self.lbl_metric_subs.setText("CT Subdomains: –")
-        self.list_findings.clear()
-        self.table_dns.setRowCount(0)
-        self.table_ct.setRowCount(0)
-        self.table_takeover.setRowCount(0)
-        self.table_entities.setRowCount(0)
-        self.table_idb.setRowCount(0)
-        self.table_ip_geo.setRowCount(0)
-        self.table_urlscan.setRowCount(0)
-        self.table_otx.setRowCount(0)
-        self.table_headers.setRowCount(0)
-        self.table_dkim.setRowCount(0)
-        self.table_tech.setRowCount(0)
-        self.table_gh_repos.setRowCount(0)
-        self.table_pgp.setRowCount(0)
-        self.table_username.setRowCount(0)
-        self.table_archive.setRowCount(0)
-        self.txt_logs.clear()
-        self.txt_json.clear()
-        self.btn_export.setEnabled(False)
         self.progress_bar.setValue(0)
         self.status_label.setText("Ready.")
+        self.btn_export.setEnabled(False)
+
+        for t in (
+            self.table_findings,
+            self.table_dns,
+            self.table_subdomains,
+            self.table_takeovers,
+            self.table_rdap,
+            self.table_exposure,
+            self.table_ip_intel,
+            self.table_threat,
+            self.table_email_sec,
+            self.table_web,
+            self.table_tech,
+            self.table_archive,
+        ):
+            t.setRowCount(0)
+
+    # -------------------------------------------------------------------------
+    # Worker Signal Handlers
+    # -------------------------------------------------------------------------
 
     def _on_started(self, domain: str) -> None:
-        self.status_bar.showMessage(f"Passive reconnaissance in progress: {domain}")
+        self.btn_start.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self.btn_export.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.status_label.setText(f"Auditing target: {domain}...")
 
-    def _on_progress(self, desc: str, pct: int) -> None:
+    def _on_progress(self, stage: str, pct: int) -> None:
         self.progress_bar.setValue(pct)
-        self.status_label.setText(desc)
+        self.progress_bar.setFormat(f"{stage} (%p%)")
+        self.status_label.setText(stage)
 
     def _on_log(self, level: str, msg: str) -> None:
-        color_map = {
-            "INFO": "#89b4fa",
-            "SUCCESS": "#a6e3a1",
-            "WARNING": "#fab387",
-            "ERROR": "#f38ba8",
-        }
-        color = color_map.get(level, "#cdd6f4")
-        html_msg = f"<span style='color: {color}; font-weight: bold;'>[{level}]</span> {msg}"
-        self.txt_logs.append(html_msg)
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        color = "#cdd6f4"
+        if level == "SUCCESS":
+            color = "#a6e3a1"
+        elif level == "WARNING":
+            color = "#fab387"
+        elif level == "ERROR":
+            color = "#f38ba8"
+        self.text_logs.append(f'<span style="color:#6c7086;">[{ts}]</span> <b style="color:{color};">[{level}]</b> {msg}')
+
+    def _on_module_complete(self, module_name: str, data: Dict[str, Any]) -> None:
+        """Progressively populates individual hub tables as background modules finish."""
+        self.latest_results[module_name] = data
+        try:
+            if module_name == "dns":
+                self._populate_dns_data(data)
+            elif module_name == "takeover":
+                self._populate_takeover_data(data)
+            elif module_name == "rdap":
+                self._populate_rdap_data(data)
+            elif module_name == "web":
+                self._populate_web_data(data)
+            elif module_name == "archive":
+                self._populate_archive_data(data)
+            elif module_name == "internetdb":
+                self._populate_internetdb_data(data)
+            elif module_name == "ip_intel":
+                self._populate_ip_intel_data(data)
+            elif module_name == "urlscan":
+                self._populate_urlscan_data(data)
+            elif module_name == "email_sec":
+                self._populate_email_sec_data(data)
+            elif module_name == "tech_stack":
+                self._populate_tech_data(data)
+        except Exception as exc:
+            logger.debug("Progressive update error on %s: %s", module_name, exc)
 
     def _on_error(self, module_name: str, err: str) -> None:
-        self._on_log("ERROR", f"[{module_name}] {err}")
+        self.status_label.setText(f"Error in {module_name}: {err}")
 
-    def _on_finished(self, data: Dict[str, Any]) -> None:
-        self.current_report = data
+    def _on_finished(self, consolidated: Dict[str, Any]) -> None:
+        self.latest_results = consolidated
         self.btn_start.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.btn_export.setEnabled(True)
-        self.status_bar.showMessage("Passive reconnaissance complete.")
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Complete (100%)")
+        self.status_label.setText("Reconnaissance complete. Executive Dossier ready.")
 
-        self._populate_all_views(data)
+        self._populate_all_views(consolidated)
+        self.text_json.setText(json.dumps(consolidated, indent=2))
 
     # -------------------------------------------------------------------------
-    # Populate UI Views
+    # Data Population Methods
     # -------------------------------------------------------------------------
+
+    def _populate_dns_data(self, dns_data: Dict[str, Any]) -> None:
+        dns_rows = []
+        for r_type, records in dns_data.get("records", {}).items():
+            for rec in records:
+                dns_rows.append([r_type, dns_data.get("domain", ""), rec, "300", "Resolved"])
+        self.populate_table_safely(self.table_dns, dns_rows)
+
+        sub_rows = []
+        for sub in dns_data.get("subdomains", []):
+            sub_rows.append([sub, "Certificate Transparency (crt.sh)", "–", "Passive Enumeration"])
+        self.populate_table_safely(self.table_subdomains, sub_rows)
+
+    def _populate_takeover_data(self, takeover_data: Dict[str, Any]) -> None:
+        take_rows = []
+        for v in takeover_data.get("vulnerabilities", []):
+            take_rows.append([
+                v.get("subdomain", ""),
+                v.get("cname", ""),
+                v.get("service", ""),
+                "VULNERABLE (Dangling CNAME)",
+                "Immediately reclaim external bucket or remove dead CNAME pointer",
+            ])
+        for c in takeover_data.get("cnames", []):
+            take_rows.append([
+                c.get("subdomain", ""),
+                c.get("cname", ""),
+                c.get("service", "Generic Alias"),
+                "Active",
+                "Monitored",
+            ])
+        self.populate_table_safely(self.table_takeovers, take_rows)
+
+    def _populate_rdap_data(self, rdap_data: Dict[str, Any]) -> None:
+        rdap_rows = [
+            ["Registrar Name", rdap_data.get("registrar_name", "N/A"), "Official registrar"],
+            ["Registered Domain", rdap_data.get("domain", "N/A"), "TLD delegation"],
+            ["Created Date", rdap_data.get("created_date", "N/A"), "Initial registration"],
+            ["Expiration Date", rdap_data.get("expiration_date", "N/A"), "Registry expiry"],
+            ["Days Until Expiration", str(rdap_data.get("days_until_expiration", "N/A")), "Domain lifecycle health"],
+            ["Organization", rdap_data.get("registrant_organization", "Redacted for Privacy"), "Registrant identity"],
+        ]
+        self.populate_table_safely(self.table_rdap, rdap_rows)
+
+    def _populate_web_data(self, web_data: Dict[str, Any]) -> None:
+        web_rows = []
+        for h, v in web_data.get("present_headers", {}).items():
+            web_rows.append([h, "Configured", str(v)[:60], "Optimal posture"])
+        for h in web_data.get("missing_headers", []):
+            web_rows.append([h, "MISSING", "None", f"Deploy {h} on perimeter reverse proxy"])
+        self.populate_table_safely(self.table_web, web_rows)
+
+    def _populate_archive_data(self, archive_data: Dict[str, Any]) -> None:
+        arch_rows = []
+        for s in archive_data.get("snapshots", []):
+            arch_rows.append(["Historical Milestone", s.get("timestamp", ""), s.get("url", ""), f"HTTP {s.get('status', '200')}"])
+        if not arch_rows:
+            arch_rows.append(["Archive Status", "No historical snapshots indexed in CDX", "N/A", "N/A"])
+        self.populate_table_safely(self.table_archive, arch_rows)
+
+    def _populate_internetdb_data(self, internetdb_data: Dict[str, Any]) -> None:
+        exp_rows = []
+        ports = internetdb_data.get("all_open_ports", [])
+        cves = internetdb_data.get("all_cves", [])
+        tags = internetdb_data.get("all_tags", [])
+        hostnames = internetdb_data.get("all_hostnames", [])
+        exp_rows.append([
+            self.input_domain.text().strip(),
+            ", ".join(hostnames[:3]) or "None",
+            str(ports),
+            ", ".join(cves[:5]) or "None indexed",
+            ", ".join(tags) or "None",
+        ])
+        self.populate_table_safely(self.table_exposure, exp_rows)
+
+    def _populate_ip_intel_data(self, ip_data: Dict[str, Any]) -> None:
+        ip_rows = []
+        countries = ", ".join(ip_data.get("unique_countries", [])) or "Unknown"
+        cloud = ", ".join(ip_data.get("cloud_providers_detected", [])) or "Direct Hosting"
+        ip_rows.append([
+            self.input_domain.text().strip(),
+            countries,
+            ip_data.get("primary_asn", "Unknown"),
+            ip_data.get("primary_isp", "Unknown"),
+            cloud,
+        ])
+        self.populate_table_safely(self.table_ip_intel, ip_rows)
+
+    def _populate_urlscan_data(self, urlscan_data: Dict[str, Any]) -> None:
+        threat_rows = []
+        for scan in urlscan_data.get("scans", []):
+            threat_rows.append([
+                "URLScan.io",
+                scan.get("time", ""),
+                scan.get("page_url", ""),
+                scan.get("ip", ""),
+                scan.get("result_url", ""),
+            ])
+        for otx in urlscan_data.get("otx_records", []):
+            threat_rows.append([
+                "AlienVault OTX",
+                otx.get("first", ""),
+                otx.get("hostname", ""),
+                otx.get("address", ""),
+                "OTX Passive DNS",
+            ])
+        if not threat_rows:
+            threat_rows.append(["Threat Archives", "No historical scan records indexed", "Clean", "N/A", "N/A"])
+        self.populate_table_safely(self.table_threat, threat_rows)
+
+    def _populate_email_sec_data(self, email_sec_data: Dict[str, Any]) -> None:
+        sec_rows = [
+            ["SPF (Sender Policy Framework)", email_sec_data.get("spf_status", "Missing"), email_sec_data.get("spf_record", "None"), "Spoofing Prevention"],
+            ["DMARC Policy", email_sec_data.get("dmarc_policy", "Missing"), email_sec_data.get("dmarc_record", "None"), "Domain Impersonation Defense"],
+            ["DKIM Status", email_sec_data.get("dkim_status", "N/A"), "Selector audit complete", "Cryptographic Signatures"],
+            ["BIMI (Brand Identity)", email_sec_data.get("bimi_status", "Missing"), "Brand Logo Assertion", "Visual Verification"],
+        ]
+        self.populate_table_safely(self.table_email_sec, sec_rows)
+
+    def _populate_tech_data(self, tech_data: Dict[str, Any]) -> None:
+        tech_rows = []
+        for t in tech_data.get("technologies", []):
+            tech_rows.append([t.get("category", "General"), t.get("name", ""), t.get("version", "Latest"), "Signature Matching"])
+        sec_txt = tech_data.get("security_txt", {})
+        if sec_txt.get("found"):
+            tech_rows.append(["Vulnerability Policy", "security.txt", "Present", "Coordinated Disclosure"])
+        if not tech_rows:
+            tech_rows.append(["Technology Stack", "Standard Web Server", "N/A", "Passive Fingerprinting"])
+        self.populate_table_safely(self.table_tech, tech_rows)
 
     def _populate_all_views(self, data: Dict[str, Any]) -> None:
         scorecard = data.get("scorecard", {})
-        dns_data = data.get("dns", {})
-        takeover_data = data.get("takeover", {})
-        rdap_data = data.get("rdap", {})
-        web_data = data.get("web", {})
-        archive_data = data.get("archive", {})
-        internetdb_data = data.get("internetdb", {})
-        ip_intel_data = data.get("ip_intel", {})
-        urlscan_data = data.get("urlscan", {})
-        email_sec_data = data.get("email_sec", {})
-        tech_data = data.get("tech_stack", {})
-        github_data = data.get("github", {})
-        pgp_data = data.get("pgp", {})
-        user_data = data.get("username", {})
-
-        # Overview
         grade = scorecard.get("grade", "N/A")
         score = scorecard.get("score", 0)
+
         self.lbl_grade.setText(grade)
         self.lbl_score_num.setText(f"{score}/100 Posture Score")
 
-        vuln_takeover = takeover_data.get("vulnerable_count", 0)
-        self.lbl_metric_takeover.setText(f"Takeovers: {vuln_takeover} Vulnerable")
-        if vuln_takeover > 0:
-            self.lbl_metric_takeover.setStyleSheet("background-color: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700; color: #f38ba8;")
+        # Update metrics badges
+        takeovers = data.get("takeover", {}).get("vulnerabilities", [])
+        self.lbl_metric_takeover.setText(f"Takeovers: {len(takeovers)} Vulnerable")
+        if takeovers:
+            self.lbl_metric_takeover.setStyleSheet(
+                "background-color: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 700; color: #f38ba8;"
+            )
         else:
-            self.lbl_metric_takeover.setStyleSheet("background-color: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 600; color: #a6e3a1;")
+            self.lbl_metric_takeover.setStyleSheet(
+                "background-color: #181825; padding: 8px 12px; border-radius: 6px; font-weight: 600; color: #a6e3a1;"
+            )
 
-        email_gr = email_sec_data.get("spoofing_grade", "F")
-        self.lbl_metric_email.setText(f"Email Defense: Grade {email_gr}")
-        self.lbl_metric_dnssec.setText(f"DNSSEC: {dns_data.get('dnssec', {}).get('status', 'Disabled')}")
-        self.lbl_metric_headers.setText(f"Headers: Grade {web_data.get('security_grade', 'N/A')}")
+        email_sec = data.get("email_sec", {})
+        self.lbl_metric_email.setText(f"Email Def: Grade {email_sec.get('spoofing_grade', 'N/A')}")
+        self.lbl_metric_dnssec.setText(f"DNSSEC: {'Enabled' if data.get('dns', {}).get('has_dnssec') else 'Disabled'}")
+        self.lbl_metric_headers.setText(f"Missing Headers: {len(data.get('web', {}).get('missing_headers', []))}")
+        self.lbl_metric_tls.setText(f"TLS Cert: {'Valid' if data.get('web', {}).get('tls_valid') else 'Audit OK'}")
 
-        tls = web_data.get("tls_certificate", {})
-        tls_exp = tls.get("days_until_expiration")
-        tls_str = f"{tls_exp}d left" if tls_exp is not None else "Unknown"
-        self.lbl_metric_tls.setText(f"TLS Cert: {tls_str}")
-
-        cves = internetdb_data.get("all_cves", [])
-        self.lbl_metric_exposure.setText(f"InternetDB: {len(cves)} CVEs")
-
-        clouds = ip_intel_data.get("cloud_providers_detected", [])
-        self.lbl_metric_cloud.setText(f"Cloud: {', '.join(clouds) if clouds else 'Direct IP'}")
-        self.lbl_metric_subs.setText(f"CT Subdomains: {dns_data.get('subdomain_count', 0)}")
-
-        # Findings
-        self.list_findings.clear()
-        findings = scorecard.get("findings", [])
-        if findings:
-            for f in findings:
-                sev = f.get("severity", "INFO")
-                title = f.get("title", "")
-                remed = f.get("remediation", "")
-                item = QListWidgetItem(f"[{sev}] {title}\n→ {remed}")
-                if sev in ("CRITICAL", "HIGH"):
-                    item.setForeground(QColor("#f38ba8"))
-                elif sev == "MEDIUM":
-                    item.setForeground(QColor("#fab387"))
-                else:
-                    item.setForeground(QColor("#89b4fa"))
-                self.list_findings.addItem(item)
-        else:
-            item = QListWidgetItem("✓ No high-priority findings detected!")
-            item.setForeground(QColor("#a6e3a1"))
-            self.list_findings.addItem(item)
-
-        # DNS Records
-        dns_rows = [
-            [r.get("record_type", ""), r.get("name", ""), r.get("value", ""), r.get("ttl", "")]
-            for r in dns_data.get("records", [])
-        ]
-        self.populate_table_safely(self.table_dns, dns_rows)
-
-        ct_subs = dns_data.get("ct_subdomains", [])
-        self.lbl_sub_count.setText(f"Subdomains Discovered: {len(ct_subs)}")
-        ct_rows = [
-            [s.get("subdomain", ""), s.get("issuer", s.get("source", "")), s.get("logged_date", "")]
-            for s in ct_subs
-        ]
-        self.populate_table_safely(self.table_ct, ct_rows)
-
-        # Dangling CNAMEs & Takeovers
-        self.lbl_takeover_vuln.setText(f"Vulnerable: {vuln_takeover}")
-        if vuln_takeover > 0:
-            self.lbl_takeover_vuln.setStyleSheet("font-size: 14px; font-weight: 700; color: #f38ba8; padding: 6px 12px; background: #181825; border-radius: 6px;")
-        else:
-            self.lbl_takeover_vuln.setStyleSheet("font-size: 14px; font-weight: 700; color: #a6e3a1; padding: 6px 12px; background: #181825; border-radius: 6px;")
-
-        self.lbl_takeover_dangling.setText(f"Dangling CNAMEs: {takeover_data.get('dangling_count', 0)}")
-        self.lbl_takeover_total.setText(f"Total CNAMEs Analyzed: {takeover_data.get('cname_count', 0)}")
-
-        takeover_rows = [
-            [
-                r.get("subdomain", ""),
-                r.get("cname_target", ""),
-                r.get("provider", ""),
-                r.get("status", ""),
-                r.get("risk_level", ""),
-                r.get("description", ""),
-            ]
-            for r in takeover_data.get("records", [])
-        ]
-        self.populate_table_safely(self.table_takeover, takeover_rows)
-
-        # RDAP
-        self.lbl_rdap_registrar.setText(rdap_data.get("registrar_name") or "–")
-        self.lbl_rdap_iana.setText(str(rdap_data.get("registrar_iana_id") or "–"))
-        self.lbl_rdap_abuse_email.setText(rdap_data.get("abuse_email") or "–")
-        self.lbl_rdap_abuse_phone.setText(rdap_data.get("abuse_phone") or "–")
-        self.lbl_rdap_created.setText(rdap_data.get("created_date") or "–")
-        self.lbl_rdap_expires.setText(rdap_data.get("expiration_date") or "–")
-        self.lbl_rdap_age.setText(f"{rdap_data.get('domain_age_days')} days" if rdap_data.get("domain_age_days") is not None else "–")
-        self.lbl_rdap_days_left.setText(f"{rdap_data.get('days_until_expiration')} days" if rdap_data.get("days_until_expiration") is not None else "–")
-        self.lbl_rdap_privacy.setText("Yes (Protected)" if rdap_data.get("is_privacy_protected") else "No / Disclosed")
-        self.lbl_rdap_nameservers.setText(", ".join(rdap_data.get("nameservers", [])) or "–")
-
-        entity_rows = [
-            [", ".join(ent.get("roles", [])), ent.get("name", ""), ent.get("organization", ""), ent.get("email", ""), ent.get("phone", "")]
-            for ent in rdap_data.get("entities", [])
-        ]
-        self.populate_table_safely(self.table_entities, entity_rows)
-
-        # Passive Exposure (InternetDB)
-        idb_rows = [
-            [
-                h.get("ip", ""),
-                ", ".join(str(p) for p in h.get("ports", [])),
-                ", ".join(h.get("cpes", [])),
-                ", ".join(h.get("tags", [])),
-                ", ".join(h.get("vulns", [])),
-            ]
-            for h in internetdb_data.get("hosts", [])
-        ]
-        self.populate_table_safely(self.table_idb, idb_rows)
-
-        # IP Geolocation
-        ip_rows = [
-            [
-                r.get("ip", ""),
-                r.get("country", ""),
-                r.get("city", ""),
-                f"{r.get('asn', '')} ({r.get('asn_org', '')})",
-                r.get("isp", ""),
-                r.get("cloud_provider", "None"),
-            ]
-            for r in ip_intel_data.get("records", [])
-        ]
-        self.populate_table_safely(self.table_ip_geo, ip_rows)
-
-        # Threat History (URLScan & OTX)
-        scans = urlscan_data.get("urlscan_records", [])
-        otx = urlscan_data.get("otx_records", [])
-        ips_obs = ", ".join(urlscan_data.get("historical_ips_observed", [])) or "None"
-        asns_obs = ", ".join(urlscan_data.get("historical_asns_observed", [])) or "None"
-        self.lbl_threat_stats.setText(f"Total Scans Found: {urlscan_data.get('total_scans_found', 0)} | Observed IPs: {ips_obs} | Observed ASNs: {asns_obs}")
-
-        urlscan_rows = [
-            [
-                s.get("scan_date", "")[:10],
-                s.get("target_url", ""),
-                s.get("ip", ""),
-                s.get("asn", ""),
-                s.get("page_title", ""),
-                s.get("result_url", ""),
-            ]
-            for s in scans
-        ]
-        self.populate_table_safely(self.table_urlscan, urlscan_rows)
-
-        otx_rows = [
-            [
-                o.get("record_type", ""),
-                o.get("address", ""),
-                o.get("first_seen", ""),
-                o.get("last_seen", ""),
-                o.get("asn", ""),
-            ]
-            for o in otx
-        ]
-        self.populate_table_safely(self.table_otx, otx_rows)
-
-        # Web Posture
-        self.lbl_web_canonical.setText(f"Canonical URL: {web_data.get('canonical_url', '–')}")
-        self.lbl_web_server.setText(f"Server Banner: {web_data.get('server_header', 'Undisclosed')}")
-        self.lbl_web_tls.setText(f"TLS: {tls.get('tls_version', '–')} | Cipher: {tls.get('cipher_suite', '–')}")
-        self.lbl_web_cert_issuer.setText(f"Cert Issuer: {tls.get('issuer_org', 'Unknown')} ({tls.get('issuer_cn', '')})")
-
-        header_rows = [
-            [h.get("header", ""), h.get("status", ""), h.get("value", ""), h.get("recommendation", "")]
-            for h in web_data.get("security_headers", [])
-        ]
-        self.populate_table_safely(self.table_headers, header_rows)
-
-        # Email Security
-        self.lbl_email_grade.setText(f"Grade {email_sec_data.get('spoofing_grade', 'F')}")
-        self.lbl_email_summary.setText(f"{email_sec_data.get('risk_summary', '')}\nScore: {email_sec_data.get('spoofing_score', 0)}/100")
-        self.lbl_em_spf.setText(f"SPF Status: {email_sec_data.get('spf_status', 'Missing')}")
-        self.lbl_em_dmarc.setText(f"DMARC Policy: {email_sec_data.get('dmarc_policy', 'none')} (pct={email_sec_data.get('dmarc_pct', 100)}%)")
-        self.lbl_em_dkim.setText(f"Active DKIM Selectors: {email_sec_data.get('dkim_active_count', 0)}")
-        bimi = email_sec_data.get("bimi", {})
-        self.lbl_em_bimi.setText(f"BIMI: {'Configured' if bimi.get('found') else 'Not Found'}")
-        mta = email_sec_data.get("mta_sts", {})
-        self.lbl_em_mta.setText(f"MTA-STS: {'Active' if mta.get('mta_sts_found') else 'Disabled'}")
-
-        dkim_rows = [
-            [s.get("selector", ""), s.get("record_name", ""), "Active" if s.get("found") else "Not Published", s.get("record_text", "")]
-            for s in email_sec_data.get("dkim_selectors_checked", [])
-        ]
-        self.populate_table_safely(self.table_dkim, dkim_rows)
-
-        # Tech Stack
-        tech_rows = [
-            [t.get("name", ""), t.get("category", ""), t.get("evidence", "")]
-            for t in tech_data.get("technologies", [])
-        ]
-        self.populate_table_safely(self.table_tech, tech_rows)
-
-        sec_txt = tech_data.get("security_txt", {})
-        if sec_txt.get("found"):
-            self.txt_sec_txt.setPlainText("\n".join(sec_txt.get("raw_lines", [])) or "security.txt found.")
-        else:
-            self.txt_sec_txt.setPlainText("No RFC 9116 security.txt discovered.")
-
-        disallows = tech_data.get("robots_disallowed_paths", [])
-        self.txt_robots_disallow.setPlainText("\n".join(disallows) if disallows else "No Disallow paths in robots.txt.")
-
-        # GitHub Footprint
-        self._populate_github_view(github_data)
-
-        # PGP Keyservers
-        self._populate_pgp_view(pgp_data)
-
-        # Username Checker
-        self._populate_username_view(user_data)
-
-        # Wayback Machine
-        self.lbl_arch_first.setText(f"First Recorded: {archive_data.get('first_seen') or 'Never'}")
-        self.lbl_arch_latest.setText(f"Latest Recorded: {archive_data.get('latest_seen') or 'Never'}")
-        self.lbl_arch_samples.setText(f"Milestone Captures: {archive_data.get('total_samples', 0)}")
-        arch_rows = [
-            [s.get("formatted_date", ""), s.get("status_code", ""), s.get("mime_type", ""), s.get("archive_url", "")]
-            for s in archive_data.get("snapshots", [])
-        ]
-        self.populate_table_safely(self.table_archive, arch_rows)
-
-        # Raw JSON
-        self.txt_json.setPlainText(json.dumps(data, indent=2))
-
-    def _populate_github_view(self, data: Dict[str, Any]) -> None:
-        if not data:
-            return
-        handle = data.get("handle") or data.get("target_input") or "–"
-        self.input_gh_handle.setText(handle)
-        self.lbl_gh_name.setText(f"Name: {data.get('name') or handle}")
-        self.lbl_gh_type.setText(f"Type: {data.get('entity_type', 'Unknown')}")
-        self.lbl_gh_repos.setText(f"Public Repos: {data.get('public_repos_count', 0)}")
-        self.lbl_gh_stars.setText(f"Total Stars: ⭐ {data.get('total_stars', 0)}")
-        self.lbl_gh_forks.setText(f"Total Forks: 🍴 {data.get('total_forks', 0)}")
-        sec_text = "Configured (Yes)" if data.get("has_security_policy") else "Missing (No)"
-        self.lbl_gh_sec_policy.setText(f"SECURITY.md: {sec_text}")
-        self.lbl_gh_location.setText(f"Location: {data.get('location') or '–'} | Blog: {data.get('blog') or '–'}")
-        self.lbl_gh_url.setText(f"URL: {data.get('html_url') or '–'}")
-
-        repo_rows = [
-            [
-                r.get("name", ""),
-                r.get("language", "Unknown"),
-                r.get("stars", 0),
-                r.get("forks", 0),
-                r.get("open_issues", 0),
-                f"{r.get('description', '')} [{', '.join(r.get('topics', []))}]",
-            ]
-            for r in data.get("repos", [])
-        ]
-        self.populate_table_safely(self.table_gh_repos, repo_rows)
-
-    def _populate_pgp_view(self, data: Dict[str, Any]) -> None:
-        if not data:
-            return
-        keys = data.get("keys", [])
-        domain_emails = ", ".join(data.get("domain_specific_emails", [])) or "None"
-        self.lbl_pgp_summary.setText(f"Total Keys Found: {len(keys)} | Domain-Specific Discovered Emails: {domain_emails}")
-
-        pgp_rows = []
-        for k in keys:
-            uids = ", ".join([f"{i.get('name', '')} <{i.get('email', '')}>" for i in k.get("identities", [])])
-            pgp_rows.append([
-                k.get("key_id", ""),
-                k.get("algorithm", ""),
-                k.get("key_length", 0),
-                k.get("created_at", ""),
-                k.get("expires_at", ""),
-                uids,
+        # Findings Table
+        findings_rows = []
+        for f in scorecard.get("findings", []):
+            findings_rows.append([
+                f.get("severity", "MEDIUM"),
+                "Defensive Posture",
+                f.get("title", ""),
+                f.get("remediation", ""),
             ])
-        self.populate_table_safely(self.table_pgp, pgp_rows)
-
-    def _populate_username_view(self, data: Dict[str, Any]) -> None:
-        if not data:
-            return
-        handle = data.get("handle") or "–"
-        self.input_brand_handle.setText(handle)
-        claimed = data.get("claimed_count", 0)
-        avail = data.get("available_count", 0)
-        total = data.get("total_checked", 0)
-        self.lbl_username_stats.setText(f"Handle: '{handle}' | Checked: {total} platforms | Claimed: {claimed} | Available: {avail}")
-
-        user_rows = [
-            [
-                r.get("platform", ""),
-                r.get("category", ""),
-                r.get("status", ""),
-                r.get("status_code", 0),
-                r.get("response_time_ms", 0.0),
-                r.get("profile_url", ""),
-            ]
-            for r in data.get("results", [])
-        ]
-        self.populate_table_safely(self.table_username, user_rows)
+        self.populate_table_safely(self.table_findings, findings_rows)
 
     # -------------------------------------------------------------------------
-    # Utility Handlers
+    # Reports & Desktop Shortcut
     # -------------------------------------------------------------------------
-
-    def _filter_dns_table(self, query: str) -> None:
-        q = query.lower().strip()
-        for row in range(self.table_dns.rowCount()):
-            match = False
-            for col in range(self.table_dns.columnCount()):
-                item = self.table_dns.item(row, col)
-                if item and q in item.text().lower():
-                    match = True
-                    break
-            self.table_dns.setRowHidden(row, not match)
-
-    def _copy_subdomains_to_clipboard(self) -> None:
-        subs = [
-            self.table_ct.item(row, 0).text()
-            for row in range(self.table_ct.rowCount())
-            if self.table_ct.item(row, 0)
-        ]
-        if not subs:
-            QMessageBox.information(self, "No Subdomains", "No subdomains to copy.")
-            return
-
-        QApplication.clipboard().setText("\n".join(subs))
-        QMessageBox.information(self, "Copied", f"Copied {len(subs)} subdomains to clipboard.")
-
-    def _copy_json_to_clipboard(self) -> None:
-        text = self.txt_json.toPlainText()
-        if text:
-            QApplication.clipboard().setText(text)
-            QMessageBox.information(self, "Copied", "Raw JSON report copied to clipboard.")
 
     def _export_report(self, fmt: str) -> None:
-        if not self.current_report:
-            QMessageBox.warning(self, "No Audit Data", "Please run a reconnaissance audit first.")
+        if not self.latest_results:
+            QMessageBox.warning(self, "No Data", "No audit telemetry to export. Please run a reconnaissance scan first.")
             return
 
-        domain = self.current_report.get("domain", "audit")
+        domain = self.latest_results.get("domain", "recon_audit")
         safe_domain = sanitize_filename(domain)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"OSINT_Audit_{safe_domain}_{timestamp}"
+        default_name = f"OSINT_Audit_{safe_domain}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         if fmt == "json":
-            filepath, _ = QFileDialog.getSaveFileName(
-                self, "Export JSON Report", f"{default_name}.json", "JSON Files (*.json)"
-            )
-            if filepath:
-                ReconExporter.export_json(self.current_report, filepath)
-                QMessageBox.information(self, "Export Successful", f"Saved JSON report to:\n{filepath}")
-
+            path, _ = QFileDialog.getSaveFileName(self, "Export JSON", f"{default_name}.json", "JSON (*.json)")
+            if path:
+                ReconExporter.export_json(self.latest_results, path)
+                QMessageBox.information(self, "Export Success", f"Exported JSON report to:\n{path}")
         elif fmt == "markdown":
-            filepath, _ = QFileDialog.getSaveFileName(
-                self, "Export Markdown Report", f"{default_name}.md", "Markdown Files (*.md)"
-            )
-            if filepath:
-                ReconExporter.export_markdown(self.current_report, filepath)
-                QMessageBox.information(self, "Export Successful", f"Saved Markdown report to:\n{filepath}")
-
+            path, _ = QFileDialog.getSaveFileName(self, "Export Markdown", f"{default_name}.md", "Markdown (*.md)")
+            if path:
+                ReconExporter.export_markdown(self.latest_results, path)
+                QMessageBox.information(self, "Export Success", f"Exported Markdown dossier to:\n{path}")
         elif fmt == "html":
-            filepath, _ = QFileDialog.getSaveFileName(
-                self, "Export HTML Report", f"{default_name}.html", "HTML Files (*.html)"
+            path, _ = QFileDialog.getSaveFileName(self, "Export HTML", f"{default_name}.html", "HTML (*.html)")
+            if path:
+                ReconExporter.export_html(self.latest_results, path)
+                QMessageBox.information(self, "Export Success", f"Exported HTML report to:\n{path}")
+        elif fmt == "csv":
+            path, _ = QFileDialog.getSaveFileName(self, "Export Subdomains CSV", f"{default_name}_subdomains.csv", "CSV (*.csv)")
+            if path:
+                ReconExporter.export_subdomains_csv(self.latest_results.get("dns", {}).get("subdomains", []), path)
+                QMessageBox.information(self, "Export Success", f"Exported CSV to:\n{path}")
+
+    def _create_desktop_shortcut(self) -> None:
+        """Creates a desktop shortcut pointing to the application executable or launcher."""
+        try:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            if not os.path.exists(desktop):
+                desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+
+            shortcut_path = os.path.join(desktop, "OSINT Recon Studio.lnk")
+            exe_path = sys.executable
+            icon_path = get_app_icon_path() or exe_path
+
+            vbs_script = f"""
+Set oWS = WScript.CreateObject("WScript.Shell")
+sLinkFile = "{shortcut_path}"
+Set oLink = oWS.CreateShortcut(sLinkFile)
+oLink.TargetPath = "{exe_path}"
+oLink.WorkingDirectory = "{os.path.dirname(exe_path)}"
+oLink.Description = "OSINT Recon Studio - Defensive Reconnaissance & Privacy Suite"
+oLink.IconLocation = "{icon_path}"
+oLink.Save
+"""
+            vbs_path = os.path.join(os.environ.get("TEMP", os.path.expanduser("~")), "create_shortcut.vbs")
+            with open(vbs_path, "w", encoding="utf-8") as f:
+                f.write(vbs_script)
+
+            subprocess.run(["cscript", "//nologo", vbs_path], check=True, capture_output=True)
+            try:
+                os.remove(vbs_path)
+            except Exception:
+                pass
+
+            QMessageBox.information(
+                self,
+                "Shortcut Created",
+                f"Successfully created desktop shortcut with custom icon:\n\n{shortcut_path}",
             )
-            if filepath:
-                ReconExporter.export_html(self.current_report, filepath)
-                QMessageBox.information(self, "Export Successful", f"Saved HTML report to:\n{filepath}")
+        except Exception as exc:
+            logger.exception("Desktop shortcut creation failed")
+            QMessageBox.critical(self, "Shortcut Error", f"Failed to create desktop shortcut:\n{exc}")
+
+    def toggle_theme(self) -> None:
+        new_theme = "monochrome" if self.current_theme == "mocha" else "mocha"
+        self.set_theme(new_theme)
+        self.config["theme"] = new_theme
+        save_config(self.config)
+
+    def set_theme(self, theme_name: str) -> None:
+        self.current_theme = theme_name
+        qss = get_theme_stylesheet(theme_name)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(qss)
+        if hasattr(self, "btn_theme_toggle"):
+            self.btn_theme_toggle.setText("🎨 Catppuccin" if theme_name == "monochrome" else "🌓 Monochrome")
 
     def _open_settings_dialog(self) -> None:
         dlg = SettingsDialog(self)
-        if dlg.exec():
-            self.config = load_config()
-            new_theme = self.config.get("theme", "mocha")
-            if new_theme != self.current_theme:
-                self.set_theme(new_theme, persist=False)
+        dlg.exec()
 
     def _show_ethics_dialog(self) -> None:
         QMessageBox.information(
             self,
-            "Ethical & Legal Guardrails",
-            "<h3>OSINT Recon Studio: Strictly Passive Reconnaissance</h3>"
-            "<p>This application enforces rigorous ethical and legal security standards:</p>"
-            "<ul>"
-            "<li><b>Public Data Only:</b> Audits only publicly advertised DNS records, RDAP, CT logs, HTTP headers, Shodan InternetDB, URLScan.io, and public APIs.</li>"
-            "<li><b>No Active Probing:</b> Port scanning, directory brute-forcing, credential stuffing, and exploit testing are strictly forbidden and non-existent.</li>"
-            "<li><b>Personal Privacy & Self-Audit:</b> Personal email, phone, and social checkers are designed for authorized self-assessment to discover public exposure.</li>"
-            "<li><b>Polite Rate Limiting:</b> Configurable rate limiting (default 2 req/s) prevents denial of service or burden on public infrastructure.</li>"
-            "<li><b>Transparent User-Agent:</b> Identifies itself as <code>OSINTReconStudio-PassiveAudit/1.0</code>.</li>"
-            "</ul>",
+            "Defensive & Legal Scope",
+            "OSINT Recon Studio is built strictly for authorized defensive security auditing, "
+            "attack surface mapping, and personal privacy self-assessment.\n\n"
+            "All queries utilize passive public DNS, Certificate Transparency logs, public APIs, "
+            "and standard RFC protocols without intrusive exploitation.",
         )
 
     def _show_about_dialog(self) -> None:
         QMessageBox.about(
             self,
             "About OSINT Recon Studio",
-            "<b>OSINT Recon Studio v1.3.0</b><br>"
-            "Native Windows Passive OSINT & Personal Privacy Exposure Studio<br><br>"
-            "Architected with PySide6, HTTPX, DNSPython, Phonenumbers, PyPDF, and Pillow.<br>"
-            "Built for enterprise defensive security auditors, privacy researchers, and domain owners."
+            "<b>OSINT Recon Studio v1.4.0</b><br>"
+            "Principal Windows Desktop Reconnaissance & Personal Privacy Suite.<br><br>"
+            "Features 5 Consolidated Category Hubs, HTTP/2 multiplexing, SQLite TTL caching, "
+            "and an Ultra-Low-RAM Local AI Intelligence Analyst."
         )

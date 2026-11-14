@@ -4,13 +4,14 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue?logo=windows)](https://microsoft.com/windows)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)](https://python.org)
 [![GUI](https://img.shields.io/badge/GUI-PySide6%20%28Qt6%29-green?logo=qt)](https://www.qt.io/)
+[![Theme](https://img.shields.io/badge/Themes-Mocha%20%7C%20Monochrome-black)](https://github.com/myrxmayronstudios/osint-recon-studio)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Recon](https://img.shields.io/badge/Recon-Strictly%20Passive-success)](#1-ethical--legal-guardrails)
-[![Tests](https://img.shields.io/badge/Tests-34%20Passed%20%28100%25%29-brightgreen)](#6-running-and-testing)
+[![Tests](https://img.shields.io/badge/Tests-35%20Passed%20%28100%25%29-brightgreen)](#6-running-and-testing)
 
 **OSINT Recon Studio** is an enterprise-grade native Windows desktop application engineered for defensive security auditors, penetration testers, privacy researchers, and domain owners. It delivers comprehensive attack surface auditing and personal digital footprint auditing through **strictly passive, non-intrusive public queries with zero paid API keys required**.
 
-Featuring a modern **Catppuccin Mocha / Fluent Dark** interface with a left navigation sidebar, 19 specialized intelligence & privacy views, non-blocking asynchronous multi-threading, resilient retry logic with fallbacks, high-DPI crisp rendering, desktop shortcut pinning, bootstrap crash prevention, and multi-format report exports into JSON, Markdown, and standalone HTML.
+Featuring a dual-theme graphical interface with instant real-time toggling (`Ctrl+T`) between **Catppuccin Mocha Dark** and **Tactical Monochrome (Pure Grayscale / OLED Black)**, a responsive left navigation sidebar, 19 specialized intelligence & privacy views, non-blocking asynchronous multi-threading, resilient retry logic with fallbacks, high-DPI crisp rendering, desktop shortcut pinning, bootstrap crash prevention, and multi-format report exports into JSON, Markdown, and standalone HTML.
 
 ---
 
@@ -131,6 +132,14 @@ build_windows.bat
 Output standalone executable:
 `dist\OSINTReconStudio\OSINTReconStudio.exe`
 
+### Quick Launch Options:
+* **Desktop Shortcut:** Double-click [OSINT Recon Studio.lnk](file:///C:/Users/balin/Desktop/OSINT%20Recon%20Studio.lnk) on your Windows Desktop.
+* **Batch Launcher:** Double-click [OSINTReconStudio.bat](file:///C:/Users/balin/.gemini/antigravity/scratch/osint-recon-studio/OSINTReconStudio.bat) or [run_app.bat](file:///C:/Users/balin/.gemini/antigravity/scratch/osint-recon-studio/run_app.bat).
+* **Silent VBS Launcher (No Black Console):** Double-click [OSINTReconStudio.vbs](file:///C:/Users/balin/.gemini/antigravity/scratch/osint-recon-studio/OSINTReconStudio.vbs).
+
+### Switch Visual Themes:
+* Press **`Ctrl+T`** or click the **`[🌓 Monochrome]`** button in the top toolbar to toggle between **Catppuccin Mocha Dark** and **Tactical Monochrome (Pure Grayscale / OLED Black)**.
+
 ### Run Headless Self-Test:
 ```cmd
 dist\OSINTReconStudio\OSINTReconStudio.exe --self-test
@@ -140,7 +149,7 @@ dist\OSINTReconStudio\OSINTReconStudio.exe --self-test
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/ -v
 ```
-*(All 34 tests execute 100% offline via deterministic mock fixtures).*
+*(All 35 tests execute 100% offline via deterministic mock fixtures).*
 
 ---
 

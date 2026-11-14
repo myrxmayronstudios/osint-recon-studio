@@ -8,8 +8,11 @@
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Recon](https://img.shields.io/badge/Recon-Strictly%20Passive-success)](#1-ethical--legal-guardrails)
 [![Tests](https://img.shields.io/badge/Tests-35%20Passed%20%28100%25%29-brightgreen)](#6-running-and-testing)
+[![Download Release](https://img.shields.io/badge/Download%20v1.3.0-Windows%20x64%20%28.zip%29-brightgreen?logo=windows)](https://github.com/myrxmayronstudios/osint-recon-studio/releases/latest)
 
 **OSINT Recon Studio** is an enterprise-grade native Windows desktop application engineered for defensive security auditors, penetration testers, privacy researchers, and domain owners. It delivers comprehensive attack surface auditing and personal digital footprint auditing through **strictly passive, non-intrusive public queries with zero paid API keys required**.
+
+> 📥 **Quick Download:** Grab the pre-compiled, zero-setup standalone executable from **[Releases v1.3.0](https://github.com/myrxmayronstudios/osint-recon-studio/releases/tag/v1.3.0)**. Extract the zip and run `OSINTReconStudio.exe`!
 
 Featuring a dual-theme graphical interface with instant real-time toggling (`Ctrl+T`) between **Catppuccin Mocha Dark** and **Tactical Monochrome (Pure Grayscale / OLED Black)**, a responsive left navigation sidebar, 19 specialized intelligence & privacy views, non-blocking asynchronous multi-threading, resilient retry logic with fallbacks, high-DPI crisp rendering, desktop shortcut pinning, bootstrap crash prevention, and multi-format report exports into JSON, Markdown, and standalone HTML.
 

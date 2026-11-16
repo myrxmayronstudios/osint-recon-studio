@@ -533,3 +533,7 @@ class ReconExporter:
 
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(html_out))
+
+
+# Alias for backward compatibility and test diagnostics
+Exporter = ReconExporter

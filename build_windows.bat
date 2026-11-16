@@ -175,15 +175,15 @@ if exist "run_app.bat" (
     copy /y "run_app.bat" "dist\OSINTReconStudio\" >nul 2>&1
 )
 
-:: 7. Automated Self-Test Verification
+:: 7. Automated Verification & Diagnostic Suite
 echo.
-echo [*] Running automated self-test on compiled executable...
+echo [*] Running automated diagnostic suite on compiled executable...
 if exist "dist\OSINTReconStudio\OSINTReconStudio.exe" (
-    "dist\OSINTReconStudio\OSINTReconStudio.exe" --self-test
+    "dist\OSINTReconStudio\OSINTReconStudio.exe" --full-diagnostic
     if errorlevel 1 (
-        echo WARNING: Self-test returned an exit code error. Check crash_log.txt.
+        echo WARNING: Full diagnostic returned an exit code error. Check crash_log.txt.
     ) else (
-        echo [SELF-TEST] PASS: Compiled executable initialized successfully!
+        echo [DIAGNOSTIC] PASS: Compiled executable passed all 6 stages!
     )
 )
 

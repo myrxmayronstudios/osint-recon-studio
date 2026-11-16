@@ -32,7 +32,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rate_limit_rps": 2.0,
     "timeout_sec": 10,
     "user_agent": "OSINTReconStudio-PassiveAudit/1.0",
-    "theme": "mocha",
+    "theme": "liquid_glass",
     "github_token": "",
     "virustotal_api_key": "",
     "urlscan_api_key": "",
@@ -108,11 +108,14 @@ class SettingsDialog(QDialog):
         group_theme = QGroupBox("GUI Visual Theme")
         form_theme = QFormLayout(group_theme)
         self.combo_theme = QComboBox()
-        self.combo_theme.addItem("Catppuccin Mocha Dark (Default)", "mocha")
+        self.combo_theme.addItem("Monochrome Liquid Glass (Obsidian & Silver)", "liquid_glass")
+        self.combo_theme.addItem("Catppuccin Mocha Dark (Classic)", "mocha")
         self.combo_theme.addItem("Tactical Monochrome (Pure Grayscale / OLED Black)", "monochrome")
-        current_theme = self.config.get("theme", "mocha").lower()
-        if current_theme in ("monochrome", "mono", "bw"):
+        current_theme = self.config.get("theme", "liquid_glass").lower()
+        if current_theme == "mocha":
             self.combo_theme.setCurrentIndex(1)
+        elif current_theme in ("monochrome", "mono", "bw"):
+            self.combo_theme.setCurrentIndex(2)
         else:
             self.combo_theme.setCurrentIndex(0)
         form_theme.addRow(QLabel("Interface Theme:"), self.combo_theme)

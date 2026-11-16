@@ -120,6 +120,11 @@ def main() -> None:
     try:
         setup_windows_appid()
 
+        # Handle CLI --full-diagnostic flag
+        if "--full-diagnostic" in sys.argv:
+            from osint_studio.core.diagnostics import run_full_diagnostics
+            sys.exit(run_full_diagnostics())
+
         # Enable High DPI scaling
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

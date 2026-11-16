@@ -838,10 +838,13 @@ QPlainTextEdit, QTextEdit {
 """
 
 
+from osint_studio.ui.liquid_glass_theme import MONOCHROME_LIQUID_GLASS_QSS
+
+
 def get_theme_stylesheet(theme_name: str) -> str:
-    """Returns QSS stylesheet for the specified theme name ('mocha' or 'monochrome')."""
-    clean_name = (theme_name or "mocha").strip().lower()
-    if clean_name in ("monochrome", "mono", "bw", "black-white", "grayscale"):
-        return MONOCHROME_QSS
+    """Returns QSS stylesheet for the specified theme name ('liquid_glass', 'monochrome', or 'mocha')."""
+    clean_name = (theme_name or "liquid_glass").strip().lower()
+    if clean_name in ("liquid_glass", "liquid", "glass", "monochrome", "mono", "bw", "black-white", "grayscale"):
+        return MONOCHROME_LIQUID_GLASS_QSS
     return CATPPUCCIN_MOCHA_QSS
 

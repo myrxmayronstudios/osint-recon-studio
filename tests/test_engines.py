@@ -816,4 +816,176 @@ class TestPhase5EngineOverhaul:
         assert "CVE-2024-9999" in context
 
 
+class TestPersonalDeepOSINT:
+    """Unit tests for Phase 6 Deep Legal Personal OSINT engines."""
+
+    def test_dev_footprint_engine_mock(self):
+        import asyncio
+        from osint_studio.core.personal_deep_osint import DevFootprintEngine
+
+        mock_events = [
+            {
+                "type": "PushEvent",
+                "payload": {
+                    "commits": [
+                        {
+                            "author": {"name": "Test Dev", "email": "dev@example.org"},
+                            "message": "feat: init",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        engine = DevFootprintEngine()
+        mock_client = AsyncMock()
+        mock_resp_gh = MagicMock()
+        mock_resp_gh.status_code = 200
+        mock_resp_gh.json.return_value = mock_events
+
+        mock_resp_404 = MagicMock()
+        mock_resp_404.status_code = 404
+
+        async def mock_get(url, *args, **kwargs):
+            if "events/public" in str(url):
+                return mock_resp_gh
+            return mock_resp_404
+
+        mock_client.get.side_effect = mock_get
+
+        report = asyncio.run(engine.analyze(mock_client, "testdev"))
+        assert report.handle == "testdev"
+        assert "dev@example.org" in report.commit_emails
+        assert "Test Dev" in report.commit_authors
+        assert report.is_success is True
+
+    def test_academic_identity_engine_mock(self):
+        import asyncio
+        from osint_studio.core.personal_deep_osint import AcademicIdentityEngine
+
+        mock_openalex = {
+            "results": [
+                {
+                    "display_name": "Dr. Jane Smith",
+                    "id": "https://openalex.org/A123",
+                    "works_count": 42,
+                    "cited_by_count": 1280,
+                    "last_known_institutions": [{"display_name": "MIT"}],
+                    "ids": {"orcid": "https://orcid.org/0000-0002-1825-0097"},
+                    "x_concepts": [{"display_name": "Computer Science"}],
+                }
+            ]
+        }
+
+        engine = AcademicIdentityEngine()
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_openalex
+        mock_client.get.return_value = mock_resp
+
+        report = asyncio.run(engine.analyze(mock_client, "Jane Smith"))
+        assert report.display_name == "Dr. Jane Smith"
+        assert report.works_count == 42
+        assert report.cited_by_count == 1280
+        assert report.orcid == "0000-0002-1825-0097"
+        assert report.is_success is True
+
+    def test_activity_cadence_engine_mock(self):
+        import asyncio
+        from osint_studio.core.personal_deep_osint import ActivityCadenceEngine
+
+        engine = ActivityCadenceEngine()
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [
+            {"type": "PushEvent", "created_at": "2026-11-15T14:30:00Z"},
+            {"type": "PushEvent", "created_at": "2026-11-15T15:10:00Z"},
+            {"type": "PushEvent", "created_at": "2026-11-15T16:00:00Z"},
+        ]
+        mock_client.get.return_value = mock_resp
+
+        report = asyncio.run(engine.analyze(mock_client, "testuser"))
+        assert report.handle == "testuser"
+        assert report.total_events >= 3
+        assert len(report.ascii_chart) > 20
+        assert report.is_success is True
+
+    def test_public_records_engine_mock(self):
+        import asyncio
+        from osint_studio.core.personal_deep_osint import PublicRecordsEngine
+
+        mock_wikidata = {
+            "search": [
+                {
+                    "label": "Alan Turing",
+                    "description": "British mathematician and computer scientist",
+                    "id": "Q7251",
+                    "url": "//www.wikidata.org/wiki/Q7251",
+                }
+            ]
+        }
+
+        engine = PublicRecordsEngine()
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_wikidata
+        mock_client.get.return_value = mock_resp
+
+        report = asyncio.run(engine.analyze(mock_client, "Alan Turing"))
+        assert report.query == "Alan Turing"
+        assert len(report.items) >= 1
+        assert "Alan Turing" in report.items[0].title
+        assert report.is_success is True
+
+    def test_web3_identity_engine_mock(self):
+        import asyncio
+        from osint_studio.core.personal_deep_osint import Web3IdentityEngine
+
+        mock_ens = {
+            "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "name": "vitalik.eth",
+            "avatar": "https://vitalik.ca/avatar.png",
+            "twitter": "VitalikButerin",
+            "github": "vbuterin",
+        }
+
+        engine = Web3IdentityEngine()
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_ens
+        mock_client.get.return_value = mock_resp
+
+        report = asyncio.run(engine.analyze(mock_client, "vitalik.eth"))
+        assert report.ens_name == "vitalik.eth"
+        assert report.address == "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+        assert report.twitter == "VitalikButerin"
+        assert report.github == "vbuterin"
+        assert report.is_success is True
+
+    def test_personal_deep_osint_suite_sync(self):
+        from osint_studio.core.personal_deep_osint import PersonalDeepOSINTSuite, DeepPersonalReport
+
+        with patch.object(PersonalDeepOSINTSuite, "analyze", new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.return_value = DeepPersonalReport(target="offline_test", is_success=True)
+            res = PersonalDeepOSINTSuite.run_sync("offline_test", timeout=1.0)
+            assert res.target == "offline_test"
+            assert res.is_success is True
+
+
+class TestDiagnosticsSuite:
+    """Verifies that the full 6-stage automated health diagnostics run cleanly."""
+
+    def test_full_diagnostic_suite_passes(self):
+        from osint_studio.core.diagnostics import DiagnosticRunner
+
+        runner = DiagnosticRunner()
+        success = runner.execute_all()
+        assert success is True
+
+
+
 

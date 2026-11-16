@@ -431,6 +431,16 @@ class HeuristicAnalyst:
             f"- To test against deeper LLM models, install Ollama and run `ollama pull qwen2.5:1.5b`."
         )
 
+    @classmethod
+    def generate_deterministic_dossier(cls, findings: Dict[str, Any]) -> str:
+        """Alias for generate_dossier."""
+        return cls.generate_dossier(findings)
+
+    @classmethod
+    def answer_offline_question(cls, findings: Dict[str, Any], question: str) -> str:
+        """Convenience method for offline Q&A."""
+        return cls.answer_question(question, findings)
+
 
 class LocalLLMEngine:
     """Orchestrates token-streamed synthesis using local Ollama or Zero-RAM Heuristic Analyst."""

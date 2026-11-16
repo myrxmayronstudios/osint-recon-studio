@@ -1,20 +1,20 @@
-# 🛡️ OSINT Recon Studio v1.4.1
-### Native Windows Passive OSINT, Unified Category Hubs & Ultra-Low-RAM Local AI Analyst
+# 🛡️ OSINT Recon Studio v1.5.0
+### Native Windows Passive OSINT, Monochrome Liquid Glass Bento UI & Deep Personal OSINT Suite
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue?logo=windows)](https://microsoft.com/windows)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)](https://python.org)
 [![GUI](https://img.shields.io/badge/GUI-PySide6%20%28Qt6%29-green?logo=qt)](https://www.qt.io/)
-[![Theme](https://img.shields.io/badge/Themes-Mocha%20%7C%20Monochrome-black)](https://github.com/myrxmayronstudios/osint-recon-studio)
+[![Design](https://img.shields.io/badge/Design-Monochrome%20Liquid%20Glass-black)](https://github.com/myrxmayronstudios/osint-recon-studio)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Recon](https://img.shields.io/badge/Recon-Strictly%20Passive-success)](#1-ethical--legal-guardrails)
-[![Tests](https://img.shields.io/badge/Tests-41%20Passed%20%28100%25%29-brightgreen)](#6-running-and-testing)
-[![Download Release](https://img.shields.io/badge/Download%20v1.4.1-Windows%20x64%20%28.zip%29-brightgreen?logo=windows)](https://github.com/myrxmayronstudios/osint-recon-studio/releases/latest)
+[![Tests](https://img.shields.io/badge/Tests-48%20Passed%20%28100%25%29-brightgreen)](#6-running-and-testing)
+[![Download Release](https://img.shields.io/badge/Download%20v1.5.0-Windows%20x64%20%28.zip%29-brightgreen?logo=windows)](https://github.com/myrxmayronstudios/osint-recon-studio/releases/latest)
 
 **OSINT Recon Studio** is an enterprise-grade native Windows desktop application engineered for defensive security auditors, penetration testers, privacy researchers, and domain owners. It delivers comprehensive attack surface auditing and personal digital footprint auditing through **strictly passive, non-intrusive public queries with zero paid API keys required**.
 
-> 📥 **Quick Download:** Grab the pre-compiled, zero-setup standalone executable from **[Releases v1.4.1](https://github.com/myrxmayronstudios/osint-recon-studio/releases/tag/v1.4.1)**. Extract the zip and run `OSINTReconStudio.exe`!
+> 📥 **Quick Download:** Grab the pre-compiled, zero-setup standalone executable from **[Releases v1.5.0](https://github.com/myrxmayronstudios/osint-recon-studio/releases/tag/v1.5.0)**. Extract the zip and run `OSINTReconStudio.exe`!
 
-Featuring a dual-theme graphical interface with instant real-time toggling (`Ctrl+T`) between **Catppuccin Mocha Dark** and **Tactical Monochrome (Pure Grayscale / OLED Black)**, **5 Consolidated Category Hubs**, an **Ultra-Low-RAM (<2 GB RAM) Local AI Intelligence Analyst** with zero-RAM rule-based fallback, **HTTP/2 multiplexing**, **SQLite 24-hour TTL caching** (<50ms repeat lookups), a **Privacy Metadata Scrubber ("Sanitize & Save Clean Copy")**, and multi-format report exports into JSON, Markdown, and standalone HTML.
+Featuring a **Monochrome Liquid Glass design system** with Windows 11 DWM Acrylic/Mica backdrop, an **Executive Three-Pane Bento Layout** (Omni-Target Command Bar, Left Navigation Rail with live category count badges, Center Bento Workspace with 4 KPI tiles per Hub, and Right Collapsible Inspector & Mini-AI Drawer), **5 Expanded Category Hubs**, a **Deep Legal Personal OSINT Suite** (Developer commit mining, Academic & ORCID research, 24-hr Activity Cadence with ASCII timezone charts, Public Records & 501(c) nonprofits, Web3 ENS identity), an **Ultra-Low-RAM (<2 GB RAM) Local AI Intelligence Analyst**, **SQLite 24-hour TTL caching**, and an automated **6-Stage Full Diagnostic Suite (`--full-diagnostic`)**.
 
 ---
 

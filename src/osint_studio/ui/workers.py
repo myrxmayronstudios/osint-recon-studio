@@ -24,6 +24,7 @@ from osint_studio.core.email_security_engine import EmailSecurityEngine
 from osint_studio.core.github_osint_engine import audit_github_footprint
 from osint_studio.core.internetdb_engine import InternetDBEngine
 from osint_studio.core.ip_intel_engine import IPIntelEngine
+from osint_studio.core.legal_scraper_engine import LegalScraperEngine
 from osint_studio.core.local_llm_engine import DEFAULT_OLLAMA_BASE_URL, pull_model_stream
 from osint_studio.core.pgp_osint_engine import search_pgp_keys
 from osint_studio.core.rdap_engine import RDAPEngine
@@ -78,6 +79,7 @@ class ReconWorker(QRunnable):
             "github": True,
             "pgp": True,
             "username": True,
+            "legal_scraper": True,
         }
         self.rate_limit_rps = max(0.2, min(10.0, rate_limit_rps))
         self.timeout = max(2.0, min(60.0, timeout))
@@ -635,6 +637,32 @@ class ReconWorker(QRunnable):
                 self.signals.log.emit(
                     "SUCCESS",
                     f"Brand Checker: {user_dict.get('claimed_count', 0)} claimed / {user_dict.get('available_count', 0)} available out of {user_dict.get('total_checked', 0)} platforms.",
+                )
+
+                self._sleep_rate_limit()
+
+            # 14. Legal Public Scraping & AI Harvester
+            if self.enabled_modules.get("legal_scraper", True):
+                if self.is_cancelled:
+                    self.signals.log.emit("WARNING", "Reconnaissance cancelled by user.")
+                    return
+
+                self.signals.progress.emit("Harvesting compliant public web metadata & feeds...", 97)
+
+                def _fetch_legal_scraper() -> Dict[str, Any]:
+                    self.signals.log.emit("INFO", "Executing compliant OpenGraph, RSS feed, and AI data harvesting...")
+                    scraper_eng = LegalScraperEngine(timeout=self.timeout, user_agent=self.user_agent)
+                    scraper_rep = scraper_eng.analyze(self.domain)
+                    return scraper_rep.to_dict()
+
+                scraper_dict = self._execute_with_cache("legal_scraper", f"scraper:{self.domain}", _fetch_legal_scraper)
+                consolidated["legal_scraper"] = scraper_dict
+
+                self.signals.module_complete.emit("legal_scraper", scraper_dict)
+                intel_data = scraper_dict.get("extracted_intelligence", {})
+                self.signals.log.emit(
+                    "SUCCESS",
+                    f"Legal Scraper: Discovered {len(intel_data.get('entities', []))} entities, {len(scraper_dict.get('feeds', []))} feed items. Robots.txt: {'Compliant' if scraper_dict.get('compliance', {}).get('is_scraping_allowed') else 'Restricted'}.",
                 )
 
             # 14. Consolidated Scorecard

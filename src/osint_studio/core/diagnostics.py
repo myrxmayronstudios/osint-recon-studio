@@ -47,6 +47,7 @@ class DiagnosticRunner:
             import osint_studio.core.github_osint_engine
             import osint_studio.core.internetdb_engine
             import osint_studio.core.ip_intel_engine
+            import osint_studio.core.legal_scraper_engine
             import osint_studio.core.local_llm_engine
             import osint_studio.core.metadata_engine
             import osint_studio.core.personal_deep_osint
@@ -182,11 +183,23 @@ class DiagnosticRunner:
             deep_report = PersonalDeepOSINTSuite.run_sync("testuser", timeout=2.0)
             assert deep_report.target == "testuser"
 
+            # Fast offline test of Legal Public Scraper & Heuristic Structurer
+            from osint_studio.core.legal_scraper_engine import (
+                LightweightHTMLHarvester,
+                HeuristicPublicStructurer,
+            )
+            mock_html = "<html><head><title>Test Defense Org</title><meta name='description' content='Passive cybersecurity.'></head><body><p>Public statement on security.</p></body></html>"
+            harvester = LightweightHTMLHarvester()
+            harvester.feed(mock_html)
+            assert harvester.meta.title == "Test Defense Org"
+            scraper_intel = HeuristicPublicStructurer.extract_structured_intel("testdefense.org", harvester.meta, harvester.get_clean_body_text(), [])
+            assert scraper_intel.target_domain == "testdefense.org"
+
             self.log_stage(
                 4,
                 "Passive Intelligence & Deep Personal OSINT Engine Sweep",
                 True,
-                "Robust URL normalization verified, email posture engine verified, deep personal suite verified",
+                "Robust URL normalization verified, email posture verified, deep personal suite verified, legal public harvester verified",
             )
             return True
         except Exception as exc:
@@ -280,7 +293,7 @@ class DiagnosticRunner:
     def execute_all(self) -> bool:
         """Runs all 6 stages sequentially and prints executive summary banner."""
         print("=" * 76)
-        print(" OSINT RECON STUDIO v1.5.0 — FULL DIAGNOSTIC SUITE")
+        print(" OSINT RECON STUDIO v1.6.0 — FULL DIAGNOSTIC SUITE")
         print("=" * 76)
         start_time = time.time()
 

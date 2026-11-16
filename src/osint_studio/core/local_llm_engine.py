@@ -292,6 +292,18 @@ class HeuristicAnalyst:
         if tech:
             md.append(f"- **Detected Web Technologies:** {', '.join(tech[:6])}")
 
+        scraper_data = findings.get("legal_scraper", {})
+        if scraper_data:
+            meta = scraper_data.get("metadata", {})
+            intel = scraper_data.get("extracted_intelligence", {})
+            comp = scraper_data.get("compliance", {})
+            if meta.get("title") or intel.get("entities"):
+                md.append(f"- **Public Surface & OpenGraph:** Title: '{meta.get('title') or target}' (Robots Compliance: `{'Allowed' if comp.get('is_scraping_allowed') else 'Restricted'}`)")
+            if intel.get("entities"):
+                md.append(f"- **Public Entities Identified:** {', '.join(intel.get('entities')[:4])}")
+            if intel.get("contact_endpoints"):
+                md.append(f"- **Public Contact Endpoints:** {', '.join(intel.get('contact_endpoints')[:3])}")
+
         # Section 3: Personal Privacy & Digital Footprint
         md.append("\n## 3. Personal Privacy & Digital Footprint")
         if email_rep and email_rep.get("email"):

@@ -817,6 +817,18 @@ class MainWindow(QMainWindow):
         v_arch.addWidget(self.table_archive)
         tab.addTab(w_arch, "Wayback Archive")
 
+        # Tab 5: Legal Public Scraping & AI Harvester
+        w_scrap = QWidget()
+        v_scrap = QVBoxLayout(w_scrap)
+        self.table_legal_scraper = QTableWidget(0, 4)
+        self.table_legal_scraper.setObjectName("Legal Public Scraper & AI Harvester")
+        self.table_legal_scraper.setHorizontalHeaderLabels(["DATA CATEGORY", "DISCOVERED ITEM / STATEMENT", "SOURCE / PROTOCOL", "COMPLIANCE STATUS"])
+        self.table_legal_scraper.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_legal_scraper.setAlternatingRowColors(True)
+        self.table_legal_scraper.cellClicked.connect(lambda r, c: self._on_table_row_clicked(self.table_legal_scraper, r, c))
+        v_scrap.addWidget(self.table_legal_scraper)
+        tab.addTab(w_scrap, "Legal Scraping & AI")
+
         layout.addWidget(tab, 1)
         return view
 
@@ -1437,6 +1449,8 @@ class MainWindow(QMainWindow):
                 self._populate_email_sec_data(data)
             elif module_name == "tech_stack":
                 self._populate_tech_data(data)
+            elif module_name == "legal_scraper":
+                self._populate_legal_scraper_data(data)
         except Exception as exc:
             logger.debug("Progressive population exception on %s: %s", module_name, exc)
 
@@ -1635,11 +1649,62 @@ class MainWindow(QMainWindow):
         self.populate_table_safely(self.table_tech, tech_rows)
         self.lbl_kpi_tech_count.setText(str(len(tech_rows)))
 
+    def _populate_legal_scraper_data(self, scraper_data: Dict[str, Any]) -> None:
+        scraper_rows = []
+        meta = scraper_data.get("metadata", {})
+        comp = scraper_data.get("compliance", {})
+        intel = scraper_data.get("extracted_intelligence", {})
+        feeds = scraper_data.get("feeds", [])
+
+        # 1. Compliance Status
+        comp_status = "Compliant (Permitted)" if comp.get("is_scraping_allowed") else "Restricted by Policy"
+        scraper_rows.append([
+            "Compliance Gatekeeper",
+            f"Robots.txt: {'Present' if comp.get('robots_txt_found') else 'Absent'} (Crawl-delay: {comp.get('crawl_delay', 1.5)}s)",
+            "RFC 9309 / robots.txt",
+            comp_status,
+        ])
+
+        # 2. Meta & OpenGraph
+        if meta.get("title"):
+            scraper_rows.append(["Web Page Metadata", f"Title: {meta.get('title')}", "HTML <title> tag", "Public (Clean)"])
+        if meta.get("description"):
+            scraper_rows.append(["Web Page Metadata", f"Description: {meta.get('description')}", "<meta name='description'>", "Public (Clean)"])
+        if meta.get("author"):
+            scraper_rows.append(["Web Page Metadata", f"Author: {meta.get('author')}", "<meta name='author'>", "Public Profile"])
+        if meta.get("canonical_url"):
+            scraper_rows.append(["Web Page Metadata", f"Canonical URL: {meta.get('canonical_url')}", "<link rel='canonical'>", "Verified Link"])
+
+        # 3. AI Structured Intelligence: Entities & Statements
+        for ent in intel.get("entities", []):
+            scraper_rows.append(["AI Entity Extraction", f"Identified Entity: {ent}", "JSON-LD & DOM Analysis", "Public Identity"])
+
+        for stmt in intel.get("public_statements", []):
+            scraper_rows.append(["Public Statements", stmt, "DOM / Meta Disclosures", "Verified Claim"])
+
+        for ep in intel.get("contact_endpoints", []):
+            scraper_rows.append(["Contact Endpoints", f"Public Endpoint: {ep}", "DOM Anchor & Text Match", "Coordinated Point"])
+
+        for org_link in intel.get("organization_links", []):
+            scraper_rows.append(["Organization Links", org_link, "External Anchor Referrals", "Public Profile"])
+
+        # 4. RSS / Atom Feeds
+        for feed in feeds:
+            scraper_rows.append(["RSS/Atom Public Feed", f"Post: {feed.get('title')} ({feed.get('published') or 'Recent'})", "Syndication Feed XML", "Public Feed"])
+
+        if not scraper_rows:
+            scraper_rows.append(["Legal Scraper", "Public metadata harvested", "HTTP/2 Safe Scraping", "Compliant"])
+
+        self.populate_table_safely(self.table_legal_scraper, scraper_rows)
+
     def _populate_all_views(self, data: Dict[str, Any]) -> None:
         scorecard = data.get("scorecard", {})
         grade = scorecard.get("grade", "N/A")
         score = scorecard.get("score", 0)
         findings = scorecard.get("findings", [])
+
+        if "legal_scraper" in data:
+            self._populate_legal_scraper_data(data["legal_scraper"])
 
         self.lbl_kpi_grade.setText(grade)
         self.lbl_kpi_score.setText(f"{score} / 100")
